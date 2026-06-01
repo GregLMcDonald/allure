@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Mobile-first, portrait. viewport-fit=cover so we can use safe-area insets on notched phones. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#9B2D4F" />
+  <meta name="description" content="Allure — entraînement par intervalles pour la course à pied." />
+
+  <title>Allure</title>
+
+  <!-- All paths are RELATIVE (./) so the app works under a GitHub Pages subpath, e.g. /allure/. -->
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Allure" />
+
+  <!-- Google Fonts: Playfair Display (elegant serif, display) + Nunito (humanist sans, body).
+       Robust system fallbacks are declared in styles.css in case the fonts can't load offline. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <!-- ======================================================================
+       SCREEN 1 — BUILDER (home)
+       ====================================================================== -->
+  <main id="screen-builder" class="screen is-active" aria-label="Composition de la séquence">
+    <header class="app-header">
+      <span class="app-mark" aria-hidden="true">
+        <!-- Small tasteful rose/petal glyph -->
+        <svg viewBox="0 0 24 24" width="28" height="28" focusable="false">
+          <path fill="currentColor" d="M12 2c2.2 1.6 3.4 3.6 3.4 5.8 0 1-.3 1.9-.8 2.7 1-.5 2-.7 3-.7 2.2 0 4 .9 5.4 2.4-1.4 2.3-3.5 3.6-6 3.6-1 0-1.9-.2-2.7-.6.3.9.5 1.9.5 2.9 0 2.5-1.1 4.6-3.8 5.9-2.7-1.3-3.8-3.4-3.8-5.9 0-1 .2-2 .5-2.9-.8.4-1.7.6-2.7.6-2.5 0-4.6-1.3-6-3.6C3.4 10.7 5.2 9.8 7.4 9.8c1 0 2 .2 3 .7-.5-.8-.8-1.7-.8-2.7C9.6 5.6 10.8 3.6 12 2Z"/>
+        </svg>
+      </span>
+      <h1 class="app-title">Allure</h1>
+      <button id="btn-open-settings" class="icon-btn" type="button" aria-label="Réglages">
+        <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm9 4c0-.5 0-1-.1-1.5l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-2.6-1.5L15.5 2h-7l-.4 2.5A7.6 7.6 0 0 0 5.5 6L3.1 5l-2 3.4 2 1.6a8 8 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 2.6 1.5l.4 2.5h7l.4-2.5a7.6 7.6 0 0 0 2.6-1.5l2.4 1 2-3.4-2-1.6c.1-.5.1-1 .1-1.5Z"/></svg>
+      </button>
+    </header>
+
+    <p class="tagline">On y va, à ton rythme.</p>
+
+    <!-- Category chips: tap one to add a segment of that category -->
+    <section class="block" aria-labelledby="lbl-categories">
+      <div class="block-head">
+        <h2 id="lbl-categories" class="block-title">Catégories</h2>
+        <button id="btn-manage-categories" class="link-btn" type="button">Gérer</button>
+      </div>
+      <p class="hint">Touche une catégorie pour ajouter un segment.</p>
+      <div id="category-chips" class="chips" role="group" aria-label="Catégories disponibles"></div>
+    </section>
+
+    <!-- The built sequence -->
+    <section class="block" aria-labelledby="lbl-sequence">
+      <div class="block-head">
+        <h2 id="lbl-sequence" class="block-title">Séquence</h2>
+        <span id="total-duration" class="total-pill" aria-live="polite">0:00</span>
+      </div>
+      <ol id="sequence-list" class="seq-list" aria-label="Segments de la séquence"></ol>
+      <p id="sequence-empty" class="empty-note">Aucun segment pour l'instant. Ajoute-en un ci-dessus.</p>
+
+      <label class="toggle-row">
+        <span class="toggle-label">Boucle</span>
+        <span class="switch">
+          <input id="toggle-loop" type="checkbox" />
+          <span class="switch-track" aria-hidden="true"></span>
+        </span>
+      </label>
+    </section>
+
+    <!-- Presets -->
+    <section class="block" aria-labelledby="lbl-presets">
+      <div class="block-head">
+        <h2 id="lbl-presets" class="block-title">Séquences enregistrées</h2>
+      </div>
+      <div class="preset-actions">
+        <button id="btn-save-preset" class="btn btn-soft" type="button">Enregistrer la séquence</button>
+        <button id="btn-export" class="btn btn-soft" type="button">Exporter</button>
+        <button id="btn-import" class="btn btn-soft" type="button">Importer</button>
+      </div>
+      <ul id="preset-list" class="preset-list" aria-label="Séquences enregistrées"></ul>
+      <p id="preset-empty" class="empty-note">Aucune séquence enregistrée.</p>
+    </section>
+
+    <!-- Primary action -->
+    <div class="sticky-cta">
+      <button id="btn-start" class="btn btn-primary btn-big" type="button">Démarrer</button>
+    </div>
+  </main>
+
+  <!-- ======================================================================
+       SCREEN 2 — RUN (timer)
+       ====================================================================== -->
+  <main id="screen-run" class="screen" aria-label="Minuteur" hidden>
+    <header class="run-header">
+      <button id="btn-stop" class="icon-btn" type="button" aria-label="Arrêter">
+        <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M6 6h12v12H6z"/></svg>
+      </button>
+      <span id="run-progress" class="run-progress" aria-live="polite">1 / 1</span>
+      <span class="run-header-spacer" aria-hidden="true"></span>
+    </header>
+
+    <div class="run-body">
+      <!-- Circular progress ring (SVG). Stroke animated via stroke-dashoffset in app.js. -->
+      <div class="ring-wrap">
+        <svg class="ring" viewBox="0 0 240 240" aria-hidden="true">
+          <defs>
+            <linearGradient id="ring-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="var(--rose)" />
+              <stop offset="100%" stop-color="var(--primary)" />
+            </linearGradient>
+          </defs>
+          <!-- Faint blush track -->
+          <circle class="ring-track" cx="120" cy="120" r="108" />
+          <!-- Progress stroke (rotated -90° so it starts at the top) -->
+          <circle id="ring-progress" class="ring-progress" cx="120" cy="120" r="108" />
+        </svg>
+        <div class="ring-center">
+          <div id="run-time" class="run-time" role="timer" aria-live="off">0:00</div>
+          <div id="run-category" class="run-category">—</div>
+        </div>
+      </div>
+
+      <div id="run-next" class="run-next">Suivant : —</div>
+    </div>
+
+    <!-- Transport controls -->
+    <div class="run-controls">
+      <button id="btn-prev" class="ctrl-btn" type="button" aria-label="Précédent">
+        <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path fill="currentColor" d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
+        <span>Précédent</span>
+      </button>
+      <button id="btn-playpause" class="ctrl-btn ctrl-primary" type="button" aria-label="Pause">
+        <svg id="icon-pause" viewBox="0 0 24 24" width="34" height="34" aria-hidden="true"><path fill="currentColor" d="M7 5h4v14H7zm6 0h4v14h-4z"/></svg>
+        <svg id="icon-play" viewBox="0 0 24 24" width="34" height="34" aria-hidden="true" hidden><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+        <span id="playpause-label">Pause</span>
+      </button>
+      <button id="btn-next" class="ctrl-btn" type="button" aria-label="Suivant">
+        <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path fill="currentColor" d="M16 6h2v12h-2zM6 6l8.5 6L6 18z"/></svg>
+        <span>Suivant</span>
+      </button>
+    </div>
+  </main>
+
+  <!-- ======================================================================
+       MODAL — Category manager
+       ====================================================================== -->
+  <div id="modal-categories" class="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="cat-modal-title">
+      <div class="modal-head">
+        <h2 id="cat-modal-title" class="modal-title">Catégories</h2>
+        <button class="icon-btn" type="button" data-close-modal aria-label="Fermer">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12 19 6.4 17.6 5 12 10.6z"/></svg>
+        </button>
+      </div>
+      <div id="category-editor" class="cat-editor"></div>
+      <button id="btn-add-category" class="btn btn-soft btn-block" type="button">Ajouter une catégorie</button>
+    </div>
+  </div>
+
+  <!-- ======================================================================
+       MODAL — Settings
+       ====================================================================== -->
+  <div id="modal-settings" class="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="set-modal-title">
+      <div class="modal-head">
+        <h2 id="set-modal-title" class="modal-title">Réglages</h2>
+        <button class="icon-btn" type="button" data-close-modal aria-label="Fermer">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12 19 6.4 17.6 5 12 10.6z"/></svg>
+        </button>
+      </div>
+
+      <div class="set-field">
+        <label for="select-voice" class="set-label">Voix française</label>
+        <select id="select-voice" class="select"></select>
+        <p class="hint">La voix utilisée pour annoncer les segments.</p>
+        <button id="btn-test-voice" class="btn btn-soft" type="button">Tester la voix</button>
+      </div>
+
+      <label class="toggle-row">
+        <span class="toggle-label">Garder l'écran allumé</span>
+        <span class="switch">
+          <input id="toggle-wakelock" type="checkbox" />
+          <span class="switch-track" aria-hidden="true"></span>
+        </span>
+      </label>
+
+      <label class="toggle-row">
+        <span class="toggle-label">Bips 3-2-1 avant chaque transition</span>
+        <span class="switch">
+          <input id="toggle-beeps" type="checkbox" />
+          <span class="switch-track" aria-hidden="true"></span>
+        </span>
+      </label>
+
+      <p class="fine-print">
+        Lecture en arrière-plan : les annonces fonctionnent de façon fiable quand l'app
+        est au premier plan, écran allumé. Écran éteint ou app en arrière-plan, le
+        comportement dépend du système (iOS / Android) — voir le README.
+      </p>
+    </div>
+  </div>
+
+  <!-- Small toast for confirmations like "Bravo !" -->
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <!-- Hidden file input used for JSON import -->
+  <input id="file-import" type="file" accept="application/json,.json" hidden />
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
