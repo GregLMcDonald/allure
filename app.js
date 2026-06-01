@@ -243,6 +243,14 @@ const els = {
   modalCategories: $("modal-categories"),
   categoryEditor: $("category-editor"),
   btnAddCategory: $("btn-add-category"),
+  // duration picker modal
+  modalDuration: $("modal-duration"),
+  durModalTitle: $("dur-modal-title"),
+  durValue: $("dur-value"),
+  durMinus: $("dur-minus"),
+  durPlus: $("dur-plus"),
+  durQuick: $("dur-quick"),
+  durConfirm: $("dur-confirm"),
   // settings modal
   modalSettings: $("modal-settings"),
   selectVoice: $("select-voice"),
@@ -286,23 +294,83 @@ function renderChips() {
   });
 }
 
-// Prompt for a duration and add a segment of the given category.
+// Pick a duration (in-app sheet, no native prompt) and add a segment.
 function addSegment(categoryId) {
   const cat = getCategory(categoryId);
   if (!cat) return;
-  const input = window.prompt(
-    `Durée pour « ${cat.label} » (mm:ss ou minutes)`,
-    "1:00"
-  );
-  if (input === null) return; // cancelled
-  const seconds = parseDuration(input);
-  if (!seconds) {
-    showToast("Durée invalide");
-    return;
-  }
-  state.sequence.push({ categoryId, durationSeconds: seconds });
-  saveState();
-  renderSequence(state.sequence.length - 1);
+  openDurationPicker({
+    title: `Durée — ${cat.label}`,
+    initialSeconds: 60,
+    confirmLabel: "Ajouter",
+    onConfirm: (seconds) => {
+      state.sequence.push({ categoryId, durationSeconds: seconds });
+      saveState();
+      renderSequence(state.sequence.length - 1);
+    },
+  });
+}
+
+/* ---- Duration picker (bottom sheet) ---- */
+
+const DUR_STEP = 15;                            // seconds per +/- tap
+const DUR_QUICKS = [30, 60, 90, 120, 180, 300]; // quick-pick presets (s)
+const picker = { seconds: 60, onConfirm: null };
+
+function clampPickerSeconds(s) {
+  return Math.min(3600, Math.max(5, Math.round(s)));
+}
+
+function openDurationPicker(opts) {
+  picker.seconds = clampPickerSeconds(opts.initialSeconds || 60);
+  picker.onConfirm = typeof opts.onConfirm === "function" ? opts.onConfirm : null;
+  els.durModalTitle.textContent = opts.title || "Durée";
+  els.durConfirm.textContent = opts.confirmLabel || "OK";
+  renderDurQuick();
+  updateDurDisplay();
+  openModal(els.modalDuration);
+}
+
+function renderDurQuick() {
+  els.durQuick.innerHTML = "";
+  DUR_QUICKS.forEach((sec) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "dur-chip";
+    b.dataset.sec = String(sec);
+    b.textContent = formatTime(sec);
+    b.addEventListener("click", () => {
+      picker.seconds = clampPickerSeconds(sec);
+      updateDurDisplay();
+      vibrate(8);
+    });
+    els.durQuick.appendChild(b);
+  });
+}
+
+function updateDurDisplay() {
+  els.durValue.textContent = formatTime(picker.seconds);
+  // Highlight a quick chip if it matches exactly.
+  els.durQuick.querySelectorAll(".dur-chip").forEach((b) => {
+    b.classList.toggle("is-active", Number(b.dataset.sec) === picker.seconds);
+  });
+}
+
+function stepDuration(delta) {
+  // Snap to the step grid so repeated taps stay on tidy values.
+  let next;
+  if (delta > 0) next = Math.floor(picker.seconds / DUR_STEP) * DUR_STEP + DUR_STEP;
+  else next = Math.ceil(picker.seconds / DUR_STEP) * DUR_STEP - DUR_STEP;
+  picker.seconds = clampPickerSeconds(next);
+  updateDurDisplay();
+  vibrate(8);
+}
+
+function confirmDuration() {
+  const cb = picker.onConfirm;
+  const seconds = picker.seconds;
+  closeModal(els.modalDuration);
+  picker.onConfirm = null;
+  if (cb) cb(seconds);
 }
 
 function renderSequence(highlightIndex) {
@@ -331,21 +399,23 @@ function renderSequence(highlightIndex) {
     label.textContent = cat ? cat.label : "(supprimée)";
     main.appendChild(label);
 
-    // Editable duration field (mm:ss)
-    const dur = document.createElement("input");
+    // Tappable duration — opens the in-app picker.
+    const dur = document.createElement("button");
+    dur.type = "button";
     dur.className = "seq-dur";
-    dur.type = "text";
-    dur.inputMode = "numeric";
-    dur.value = formatTime(seg.durationSeconds);
-    dur.setAttribute("aria-label", "Durée du segment");
-    dur.addEventListener("change", () => {
-      const sec = parseDuration(dur.value);
-      if (sec) {
-        seg.durationSeconds = sec;
-        saveState();
-      }
-      // Re-render to normalize display (and total).
-      renderSequence();
+    dur.textContent = formatTime(seg.durationSeconds);
+    dur.setAttribute("aria-label", `Durée du segment : ${formatTime(seg.durationSeconds)}. Toucher pour modifier.`);
+    dur.addEventListener("click", () => {
+      openDurationPicker({
+        title: `Durée — ${cat ? cat.label : "segment"}`,
+        initialSeconds: seg.durationSeconds,
+        confirmLabel: "OK",
+        onConfirm: (seconds) => {
+          seg.durationSeconds = seconds;
+          saveState();
+          renderSequence();
+        },
+      });
     });
 
     const btns = document.createElement("div");
@@ -796,24 +866,49 @@ function announceSegment(seg) {
   speak(`${label}, ${spokenDuration(seg.durationSeconds)}`);
 }
 
-// Short beep using Web Audio (for the 3-2-1 countdown).
-function beep(frequency, durationMs) {
+// Play a single soft tone with a smooth attack/decay envelope (no clicks).
+// `offsetSec` schedules it relative to "now" so chimes can be sequenced.
+function tone(freq, offsetSec, durSec, peak, type) {
   if (!audioCtx) return;
   try {
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
-    osc.frequency.value = frequency;
-    osc.type = "sine";
-    gain.gain.value = 0.0001;
+    osc.type = type || "sine";
+    osc.frequency.value = freq;
     osc.connect(gain);
     gain.connect(audioCtx.destination);
-    const now = audioCtx.currentTime;
-    // Quick attack/decay envelope so it doesn't click.
-    gain.gain.exponentialRampToValueAtTime(0.25, now + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + durationMs / 1000);
-    osc.start(now);
-    osc.stop(now + durationMs / 1000 + 0.02);
+    const t0 = audioCtx.currentTime + (offsetSec || 0);
+    const p = peak || 0.2;
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(p, t0 + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + durSec);
+    osc.start(t0);
+    osc.stop(t0 + durSec + 0.03);
   } catch (e) { /* ignore */ }
+}
+
+// 3-2-1 countdown blip. The final tick is higher & a touch longer.
+function countdownTick(isLast) {
+  tone(isLast ? 1174.7 : 740, 0, isLast ? 0.2 : 0.13, isLast ? 0.24 : 0.16);
+}
+
+// Two-note rising carillon at a segment transition (gated by the Sons toggle).
+function chimeTransition() {
+  if (!state.settings.beeps) return;
+  tone(587.33, 0, 0.16, 0.18, "sine");   // D5
+  tone(880.0, 0.1, 0.24, 0.18, "sine");  // A5
+}
+
+// Cheerful ascending arpeggio for "séance terminée" (gated by the Sons toggle).
+function chimeFinish() {
+  if (!state.settings.beeps) return;
+  const notes = [
+    [523.25, 0.0, 0.22],   // C5
+    [659.25, 0.13, 0.22],  // E5
+    [783.99, 0.26, 0.22],  // G5
+    [1046.5, 0.4, 0.5],    // C6 (held)
+  ];
+  notes.forEach(([f, o, d]) => tone(f, o, d, 0.2, "triangle"));
 }
 
 function vibrate(pattern) {
@@ -979,6 +1074,7 @@ function beginSegment(index, announce) {
   // Cues
   if (announce) {
     vibrate([120, 60, 120]);
+    chimeTransition();
     announceSegment(seg);
   }
 
@@ -1042,7 +1138,7 @@ function paint() {
     const whole = Math.ceil(remainingSec);
     if (whole <= 3 && whole >= 1 && whole !== run.lastBeepSecond) {
       run.lastBeepSecond = whole;
-      beep(whole === 1 ? 1320 : 880, 140); // higher pitch on the last beep
+      countdownTick(whole === 1);
     }
   }
 }
@@ -1108,6 +1204,7 @@ function celebrate() {
 
 function finishRun() {
   vibrate([200, 100, 200, 100, 300]);
+  chimeFinish();
   speak("Bravo ! Séance terminée.");
   els.runTime.textContent = "0:00";
   stopRunInternals();
@@ -1326,6 +1423,11 @@ function bindEvents() {
     if (file) importSequencesFromFile(file);
     els.fileImport.value = ""; // allow re-importing same file
   });
+
+  // Duration picker
+  els.durMinus.addEventListener("click", () => stepDuration(-DUR_STEP));
+  els.durPlus.addEventListener("click", () => stepDuration(DUR_STEP));
+  els.durConfirm.addEventListener("click", confirmDuration);
 
   // Run transport
   els.btnPlayPause.addEventListener("click", togglePlayPause);
