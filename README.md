@@ -107,6 +107,13 @@ qu'il faut en attendre.
   Le choix « baisser » vs « mettre en pause » de la musique de fond est décidé
   par le modèle de *focus audio* du système quand notre audio / voix se
   déclenche — pas par l'app. Il n'existe pas d'API web fiable pour le forcer.
+- **Chrome sur macOS peut « bloquer » sa synthèse vocale** : `speak()` met les
+  annonces en file mais ne les démarre jamais (aucun son, `onstart` ne se
+  déclenche pas). Ce n'est pas un bug de l'app — Safari et Android fonctionnent.
+  Remède : `chrome://restart`, quitter complètement Chrome (⌘Q), ou redémarrer
+  le Mac. En attendant, les **bips** (réglages) et la **vibration** servent de
+  repères. Une voix française locale est choisie automatiquement quand elle
+  existe (sinon l'accent peut être anglais).
 
 **Recommandation pratique :** pour une séance importante, active
 « Garder l'écran allumé » et garde l'app au premier plan. Le déverrouillage

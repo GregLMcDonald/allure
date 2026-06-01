@@ -7,7 +7,7 @@
    All paths are RELATIVE so the worker works under a GitHub Pages subpath.
    ========================================================================= */
 
-const CACHE_VERSION = "allure-v1";
+const CACHE_VERSION = "allure-v3";
 
 // The app shell. Google Fonts are cached opportunistically at runtime (below)
 // so the app still installs even if the network is unavailable for fonts.
@@ -90,19 +90,24 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Same-origin assets -> cache-first.
+  // Same-origin assets -> NETWORK-FIRST with cache fallback.
+  //
+  // Cache-first would serve stale app.js/styles.css after every edit (and stale
+  // code after every deploy) until the cache version bumped — a nasty trap in
+  // development. Network-first means: fresh code whenever you're online, and
+  // the cached copy only kicks in when offline. We refresh the cache on each
+  // successful fetch so the offline fallback stays current.
   if (url.origin === self.location.origin) {
     event.respondWith(
-      caches.match(req).then((cached) => {
-        if (cached) return cached;
-        return fetch(req).then((res) => {
+      fetch(req)
+        .then((res) => {
           if (res && res.status === 200 && res.type === "basic") {
             const copy = res.clone();
             caches.open(CACHE_VERSION).then((c) => c.put(req, copy));
           }
           return res;
-        });
-      })
+        })
+        .catch(() => caches.match(req))
     );
   }
 });

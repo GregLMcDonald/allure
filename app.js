@@ -44,9 +44,9 @@ function uid(prefix) {
 function defaultState() {
   return {
     categories: [
-      { id: "cat_marche", label: "marche", color: "#F3D3DC" }, // soft blush
-      { id: "cat_v1", label: "v1", color: "#D98AA3" },         // dusty rose
-      { id: "cat_v2", label: "v2", color: "#9B2D4F" },         // deep wine
+      { id: "cat_marche", label: "marche", color: "#4ECBA5" }, // fresh mint
+      { id: "cat_v1", label: "v1", color: "#FF8A3D" },         // tangerine
+      { id: "cat_v2", label: "v2", color: "#B5184C" },         // punchy wine
     ],
     sequence: [], // [{ categoryId, durationSeconds }]
     presets: [],  // [{ id, name, segments }]
@@ -95,7 +95,7 @@ function validateState(input) {
       .map((c) => ({
         id: typeof c.id === "string" ? c.id : uid("cat"),
         label: typeof c.label === "string" && c.label.trim() ? c.label : "catégorie",
-        color: typeof c.color === "string" ? c.color : "#D98AA3",
+        color: typeof c.color === "string" ? c.color : "#FF7A9A",
       }));
     if (cats.length) out.categories = cats;
   }
@@ -278,7 +278,7 @@ function renderChips() {
     chip.className = "chip";
     chip.style.background = tint(cat.color);
     chip.innerHTML =
-      `<span class="dot" style="background:${escapeAttr(cat.color)}"></span>` +
+      `<span class="dot" style="background-color:${escapeAttr(cat.color)}"></span>` +
       `<span>${escapeHtml(cat.label)}</span>`;
     chip.setAttribute("aria-label", `Ajouter un segment ${cat.label}`);
     chip.addEventListener("click", () => addSegment(cat.id));
@@ -302,10 +302,10 @@ function addSegment(categoryId) {
   }
   state.sequence.push({ categoryId, durationSeconds: seconds });
   saveState();
-  renderSequence();
+  renderSequence(state.sequence.length - 1);
 }
 
-function renderSequence() {
+function renderSequence(highlightIndex) {
   const list = els.sequenceList;
   list.innerHTML = "";
 
@@ -318,10 +318,11 @@ function renderSequence() {
     const cat = getCategory(seg.categoryId);
     const li = document.createElement("li");
     li.className = "seq-item";
+    if (index === highlightIndex) li.classList.add("just-added");
 
     const color = document.createElement("span");
     color.className = "seq-color";
-    color.style.background = cat ? cat.color : "var(--muted)";
+    color.style.backgroundColor = cat ? cat.color : "var(--muted)";
 
     const main = document.createElement("div");
     main.className = "seq-main";
@@ -494,7 +495,7 @@ function importSequencesFromFile(file) {
             state.categories.push({
               id: c.id,
               label: String(c.label || "catégorie"),
-              color: String(c.color || "#D98AA3"),
+              color: String(c.color || "#FF7A9A"),
             });
           }
         });
@@ -579,7 +580,7 @@ function addCategory() {
   const clean = label.trim();
   if (!clean) return;
   // Pick a default color from the rose ramp, rotating through it.
-  const palette = ["#F3D3DC", "#D98AA3", "#9B2D4F", "#E08A5B", "#C76B86"];
+  const palette = ["#FF7A9A", "#FF8A3D", "#FFC15E", "#4ECBA5", "#B5184C", "#B05CFF"];
   const color = palette[state.categories.length % palette.length];
   state.categories.push({ id: uid("cat"), label: clean, color });
   saveState();
@@ -588,64 +589,7 @@ function addCategory() {
 }
 
 /* ----------------------------------------------------------------------- */
-/* 7. Settings & voices                                                     */
-/* ----------------------------------------------------------------------- */
-
-let availableVoices = [];
-
-function loadVoices() {
-  if (!("speechSynthesis" in window)) return;
-  availableVoices = window.speechSynthesis.getVoices() || [];
-  renderVoiceOptions();
-}
-
-function frenchVoices() {
-  return availableVoices.filter((v) => /^fr/i.test(v.lang));
-}
-
-function renderVoiceOptions() {
-  const sel = els.selectVoice;
-  if (!sel) return;
-  sel.innerHTML = "";
-
-  const frVoices = frenchVoices();
-  const voices = frVoices.length ? frVoices : availableVoices;
-
-  if (voices.length === 0) {
-    const opt = document.createElement("option");
-    opt.textContent = "Voix par défaut du système";
-    opt.value = "";
-    sel.appendChild(opt);
-    return;
-  }
-
-  voices.forEach((v) => {
-    const opt = document.createElement("option");
-    opt.value = v.voiceURI;
-    opt.textContent = `${v.name} (${v.lang})`;
-    sel.appendChild(opt);
-  });
-
-  // Default to stored voice, else first fr-* voice.
-  if (state.settings.voiceURI && voices.some((v) => v.voiceURI === state.settings.voiceURI)) {
-    sel.value = state.settings.voiceURI;
-  } else if (frVoices.length) {
-    state.settings.voiceURI = frVoices[0].voiceURI;
-    sel.value = state.settings.voiceURI;
-    saveState();
-  }
-}
-
-function selectedVoice() {
-  if (!state.settings.voiceURI) {
-    const fr = frenchVoices();
-    return fr.length ? fr[0] : null;
-  }
-  return availableVoices.find((v) => v.voiceURI === state.settings.voiceURI) || null;
-}
-
-/* ----------------------------------------------------------------------- */
-/* 8. Audio / TTS                                                           */
+/* 7. Audio / TTS                                                           */
 /* ----------------------------------------------------------------------- */
 
 let audioCtx = null;       // shared Web Audio context
@@ -662,38 +606,187 @@ function unlockAudio() {
     if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
   } catch (e) { /* ignore */ }
 
-  // 2) Prime speechSynthesis with a near-silent utterance so iOS lets later
-  //    (background) utterances through. Empty string can be ignored, so use
-  //    a space at volume 0.
+  // 2) Prime speechSynthesis once with a normal-volume (but content-free)
+  //    utterance so iOS unlocks audio for later announcements. A volume-0
+  //    primer does NOT reliably unlock on iOS — use the default volume, like
+  //    a plain `speak(" ")`. Guarded so we only prime once.
   try {
-    if ("speechSynthesis" in window) {
-      const primer = new SpeechSynthesisUtterance(" ");
-      primer.volume = 0;
-      primer.lang = "fr-FR";
-      window.speechSynthesis.speak(primer);
+    if ("speechSynthesis" in window && !audioUnlocked) {
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance(" "));
     }
   } catch (e) { /* ignore */ }
 
   audioUnlocked = true;
 }
 
-// Speak a phrase in French, cancelling anything already queued.
-function speak(text) {
+// --- Voices ------------------------------------------------------------- //
+// A French voice is picked automatically (so the accent is right), but the
+// user can override it in Réglages. The auto-pick scores voices to favour the
+// pleasant built-in French voices (Amélie, Thomas…) and avoid the novelty
+// ones macOS now ships in French (Eddy, Flo, Reed, Rocko…).
+let _voices = [];
+
+// Known-good French voice names, best first.
+const PREFERRED_VOICES = [
+  "amélie", "amelie", "thomas", "aurélie", "aurelie", "audrey", "virginie",
+  "marie", "google français", "google francais",
+];
+// Novelty / low-quality voice names to push to the bottom.
+const NOVELTY_VOICES = [
+  "eddy", "flo", "grandma", "grandpa", "reed", "rocko", "sandy", "shelley",
+  "bahh", "bells", "boing", "bubbles", "cellos", "jester", "organ",
+  "superstar", "trinoids", "wobble", "whisper", "zarvox", "albert",
+  "junior", "ralph", "fred", "bruce", "kathy", "bad news", "good news",
+];
+
+function loadVoices() {
   if (!("speechSynthesis" in window)) return;
+  _voices = window.speechSynthesis.getVoices() || [];
+}
+
+// Higher score = nicer voice.
+//
+// LOCAL voices are weighted very heavily: a remote / not-yet-downloaded voice
+// (e.g. "Google français", some "Premium"/"Enhanced" voices) can queue in
+// Chrome but NEVER start speaking — silent failure. So we only ever fall back
+// to a network voice if no local French voice exists at all.
+function voiceScore(v) {
+  const name = (v.name || "").toLowerCase();
+  let s = 0;
+  if (v.localService) s += 1000; // local = reliable + offline; always preferred
+  const pref = PREFERRED_VOICES.findIndex((n) => name.includes(n));
+  if (pref !== -1) s += 30 - pref; // earlier in the list scores higher
+  if (NOVELTY_VOICES.some((n) => name.includes(n))) s -= 100;
+  return s;
+}
+
+// All French voices, nicest first.
+function frenchVoices() {
+  if (!_voices.length) loadVoices();
+  return _voices
+    .filter((v) => /^fr/i.test(v.lang))
+    .sort((a, b) => voiceScore(b) - voiceScore(a));
+}
+
+// The voice to actually speak with: the user's saved choice if still present,
+// otherwise the best-scoring French voice. null => browser default.
+function selectedVoice() {
+  if (!_voices.length) loadVoices();
+  if (state.settings.voiceURI) {
+    const chosen = _voices.find((v) => v.voiceURI === state.settings.voiceURI);
+    if (chosen) return chosen;
+  }
+  const fr = frenchVoices();
+  return fr.length ? fr[0] : null;
+}
+
+// Populate the Réglages dropdown (French voices, nicest first).
+function renderVoiceOptions() {
+  const sel = els.selectVoice;
+  if (!sel) return;
+  loadVoices();
+  const fr = frenchVoices();
+  sel.innerHTML = "";
+
+  if (!fr.length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "Voix par défaut du système";
+    sel.appendChild(opt);
+    return;
+  }
+
+  fr.forEach((v) => {
+    const opt = document.createElement("option");
+    opt.value = v.voiceURI;
+    opt.textContent = v.name + " (" + v.lang + ")" + (v.localService ? "" : " · réseau");
+    sel.appendChild(opt);
+  });
+
+  const current = selectedVoice();
+  if (current) sel.value = current.voiceURI;
+}
+
+// Hold references to in-flight utterances. THIS IS THE KEY CHROME FIX: Chrome
+// (notably on macOS) garbage-collects a SpeechSynthesisUtterance that nothing
+// references, cutting it off mid-speech or never starting it — total silence.
+// Safari/Android don't have this bug. Keeping the object alive until it ends
+// is what makes TTS work in Chrome.
+const _utterances = [];
+
+// Has the speech engine EVER actually started an utterance? Used to detect a
+// browser whose TTS is wedged (e.g. some macOS Chrome installs queue
+// utterances but never fire `onstart`) so we can hint the user once.
+let _speechEverStarted = false;
+let _speechWarned = false;
+
+// Speak a phrase in French, cancelling anything already queued.
+// `useVoice` lets us retry without a specific voice if assigning one fails
+// (assigning `.voice` can fail silently on iOS Safari).
+function speak(text, useVoice) {
+  if (!("speechSynthesis" in window)) return;
+  if (useVoice === undefined) useVoice = true;
   try {
     const synth = window.speechSynthesis;
     synth.cancel(); // never queue cues up
+
     const u = new SpeechSynthesisUtterance(text);
     u.lang = "fr-FR";
-    const v = selectedVoice();
-    if (v) u.voice = v;
     u.rate = 1;
-    u.pitch = 1;
-    // Chrome can leave the engine in a "paused" state, which silently drops
-    // new utterances — resume() defends against that.
+
+    const v = useVoice ? selectedVoice() : null;
+    if (v) u.voice = v;
+
+    // Keep a reference (Chrome GC fix); drop it when the utterance settles.
+    _utterances.push(u);
+    const release = () => {
+      const i = _utterances.indexOf(u);
+      if (i !== -1) _utterances.splice(i, 1);
+    };
+    let started = false;
+    u.onstart = () => { started = true; _speechEverStarted = true; };
+    u.onend = release;
+    u.onerror = (e) => {
+      release();
+      const err = e && e.error;
+      // "interrupted"/"canceled" fire whenever we cancel() for the next
+      // segment — those are normal. A real failure with a voice set: retry
+      // once with no voice (covers the iOS-Safari ".voice fails silently" case).
+      if (useVoice && err && err !== "interrupted" && err !== "canceled") {
+        speak(text, false);
+      }
+    };
+
+    // Chrome can leave the engine "paused", which silently drops utterances.
     if (synth.paused) synth.resume();
     synth.speak(u);
+    // Some Chrome builds initialise the queue paused-but-reporting-false;
+    // an unconditional nudge helps those (harmless elsewhere).
+    synth.resume();
+
+    // Watchdog: a chosen voice that never actually starts (a remote/undownloaded
+    // voice can queue but stay silent in Chrome, with NO error) → retry once
+    // with the browser default voice. The retry passes useVoice=false, so it
+    // neither re-arms this watchdog nor loops.
+    if (useVoice && v) {
+      setTimeout(() => {
+        if (!started) speak(text, false);
+      }, 700);
+    }
   } catch (e) { /* ignore */ }
+}
+
+// If speech never actually starts shortly after a run begins, the browser's
+// TTS is likely wedged (notably some macOS Chrome installs). Tell the user
+// once that the beep/vibration cues are carrying the load.
+function maybeWarnNoSpeech() {
+  if (!("speechSynthesis" in window) || _speechWarned) return;
+  setTimeout(() => {
+    if (!_speechEverStarted && !_speechWarned) {
+      _speechWarned = true;
+      showToast("Voix muette dans ce navigateur — active les bips. (Safari fonctionne.)");
+    }
+  }, 2000);
 }
 
 // Announce a segment: "Marche, deux minutes".
@@ -834,6 +927,7 @@ const run = {
   loop: false,
   rafId: null,
   lastBeepSecond: null, // guards 3-2-1 beeps from firing twice
+  lastPulseSecond: null, // guards the ring/time "tick" bloom from firing twice
 };
 
 function currentSegment() {
@@ -857,6 +951,7 @@ function startRun() {
 
   showScreen("run");
   beginSegment(0, /*announce*/ true);
+  maybeWarnNoSpeech(); // hint once if this browser's TTS is wedged
   loop();
 }
 
@@ -868,6 +963,7 @@ function beginSegment(index, announce) {
 
   run.segmentEndAt = Date.now() + seg.durationSeconds * 1000;
   run.lastBeepSecond = null;
+  run.lastPulseSecond = null;
 
   // Visuals
   const cat = getCategory(seg.categoryId);
@@ -928,6 +1024,12 @@ function paint() {
   const displaySec = Math.ceil(remainingSec);
   els.runTime.textContent = formatTime(displaySec);
 
+  // Heartbeat: a quick ring + number bloom on each whole-second tick.
+  if (!run.paused && displaySec !== run.lastPulseSecond) {
+    run.lastPulseSecond = displaySec;
+    pulseTick();
+  }
+
   // Progress ring: fraction elapsed -> dashoffset.
   const total = seg.durationSeconds;
   const fraction = Math.min(1, Math.max(0, (total - remainingSec) / total));
@@ -956,11 +1058,60 @@ function advanceSegment() {
   }
 }
 
+// Re-trigger the one-shot "tick" bloom on the ring + countdown number.
+// Removing the class and forcing a reflow restarts the CSS animation.
+function pulseTick() {
+  [els.ringProgress, els.runTime].forEach((el) => {
+    if (!el) return;
+    el.classList.remove("tick");
+    void el.offsetWidth; // force reflow so the animation can replay
+    el.classList.add("tick");
+  });
+}
+
+// Confetti-style burst of petals for the completion celebration.
+function celebrate() {
+  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    return;
+  }
+  const layer = document.createElement("div");
+  layer.className = "celebrate";
+  layer.setAttribute("aria-hidden", "true");
+
+  const glyphs = ["✿", "❀", "✾", "❁", "🌸"];
+  const colors = ["var(--rose)", "var(--accent)", "var(--gold)", "var(--primary)", "var(--mint)"];
+  const COUNT = 28;
+  for (let i = 0; i < COUNT; i++) {
+    const p = document.createElement("span");
+    p.className = "petal";
+    p.textContent = glyphs[i % glyphs.length];
+    // Spread across the width; vary fall speed, drift, spin, size, and delay.
+    const left = (i / COUNT) * 100 + (i * 37) % 9;
+    const fall = 2.2 + ((i * 13) % 18) / 10;        // 2.2–4.0s
+    const drift = ((i * 53) % 160) - 80;            // -80–80px
+    const spin = 360 + ((i * 71) % 5) * 180;        // 360–1080deg
+    const size = 18 + ((i * 17) % 16);              // 18–34px
+    const delay = ((i * 29) % 10) / 10;             // 0–0.9s
+    p.style.left = left + "%";
+    p.style.color = colors[i % colors.length];
+    p.style.fontSize = size + "px";
+    p.style.setProperty("--fall", fall + "s");
+    p.style.setProperty("--drift", drift + "px");
+    p.style.setProperty("--spin", spin + "deg");
+    p.style.animationDelay = delay + "s";
+    layer.appendChild(p);
+  }
+  document.body.appendChild(layer);
+  // Clean up once the slowest petal has landed.
+  setTimeout(() => layer.remove(), 5200);
+}
+
 function finishRun() {
   vibrate([200, 100, 200, 100, 300]);
   speak("Bravo ! Séance terminée.");
   els.runTime.textContent = "0:00";
   stopRunInternals();
+  celebrate();
   showToast("Bravo ! ✿");
   showScreen("builder");
 }
@@ -1138,7 +1289,7 @@ function bindEvents() {
 
   // Settings
   els.btnOpenSettings.addEventListener("click", () => {
-    loadVoices();
+    renderVoiceOptions();
     els.toggleWakelock.checked = state.settings.keepScreenAwake;
     els.toggleBeeps.checked = state.settings.beeps;
     openModal(els.modalSettings);
@@ -1146,9 +1297,12 @@ function bindEvents() {
   els.selectVoice.addEventListener("change", () => {
     state.settings.voiceURI = els.selectVoice.value || null;
     saveState();
+    // Preview the chosen voice (this change is a user gesture).
+    unlockAudio();
+    speak("Bonjour, on y va à ton rythme.");
   });
   els.btnTestVoice.addEventListener("click", () => {
-    // A gesture, so it's safe to speak directly.
+    // A user gesture, so it's safe to speak directly.
     unlockAudio();
     speak("Bonjour, on y va à ton rythme.");
   });
@@ -1192,9 +1346,13 @@ function bindEvents() {
     });
   });
 
-  // Voices load asynchronously — listen for the event (the known gotcha).
+  // Voices load asynchronously in Chrome — refresh our list when they arrive,
+  // and repopulate the dropdown if the user has Réglages open.
   if ("speechSynthesis" in window) {
-    window.speechSynthesis.onvoiceschanged = loadVoices;
+    window.speechSynthesis.onvoiceschanged = () => {
+      loadVoices();
+      if (!els.modalSettings.hidden) renderVoiceOptions();
+    };
   }
 }
 
@@ -1207,7 +1365,7 @@ function init() {
 
   bindEvents();
   renderAll();
-  loadVoices(); // may be empty now; onvoiceschanged will refill
+  loadVoices(); // may be empty now; onvoiceschanged refills it in Chrome
 
   // Register the service worker with a RELATIVE path so it works under a
   // GitHub Pages subpath (e.g. /allure/).

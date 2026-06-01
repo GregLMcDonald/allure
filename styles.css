@@ -5,26 +5,32 @@
    ========================================================================= */
 
 :root {
-  /* Palette */
-  --bg: #FBF4F1;          /* warm ivory / blush cream */
+  /* Palette — "Juicy sunset": wine anchor + hot coral + tangerine + peach,
+     with a fresh mint pop for contrast. */
+  --bg: #FFF3EE;          /* warm peachy-blush cream */
   --surface: #FFFFFF;     /* near-white warm card */
-  --primary: #9B2D4F;     /* deep rose / wine */
-  --primary-deep: #7C2440;
-  --rose: #D98AA3;        /* dusty rose */
-  --blush: #F3D3DC;       /* soft blush */
-  --accent: #E08A5B;      /* warm gold / coral */
-  --ink: #2E232A;         /* deep plum-charcoal */
-  --muted: #7A6B72;       /* muted text */
+  --primary: #B5184C;     /* punchy wine */
+  --primary-deep: #8E1039;
+  --rose: #FF7A9A;        /* punchy rose */
+  --blush: #FFD9E0;       /* soft blush */
+  --accent: #FF8A3D;      /* tangerine */
+  --gold: #FFC15E;        /* peach-gold */
+  --mint: #4ECBA5;        /* fresh mint contrast pop */
+  --ink: #321E27;         /* deep plum-charcoal */
+  --muted: #8A6E75;       /* muted text */
 
-  /* Soft rosy shadow (low-opacity wine, never gray) */
-  --shadow-sm: 0 2px 10px rgba(155, 45, 79, 0.08);
-  --shadow-md: 0 8px 28px rgba(155, 45, 79, 0.12);
+  /* Warm sunset gradient used on primary CTAs / ring / accents. */
+  --grad-sunset: linear-gradient(135deg, var(--gold) 0%, var(--accent) 38%, var(--rose) 70%, var(--primary) 100%);
+
+  /* Soft warm shadow (low-opacity wine, never gray) */
+  --shadow-sm: 0 2px 10px rgba(181, 24, 76, 0.10);
+  --shadow-md: 0 10px 30px rgba(255, 122, 61, 0.22);
 
   --radius: 18px;
   --radius-sm: 12px;
 
   /* Typography */
-  --font-display: "Playfair Display", Georgia, "Times New Roman", serif;
+  --font-display: "Fredoka", "Nunito", system-ui, -apple-system, sans-serif;
   --font-body: "Nunito", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 
   /* Layout */
@@ -32,6 +38,8 @@
   --pad: 18px;
 
   --transition: 180ms ease;
+  /* Springy overshoot easing for tactile, "juicy" presses & pop-ins. */
+  --spring: 420ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 * { box-sizing: border-box; }
@@ -51,9 +59,10 @@ body {
   font-family: var(--font-body);
   color: var(--ink);
   background: var(--bg);
-  /* A subtle blush radial wash for warmth, fixed so it doesn't scroll-jank. */
+  /* Warm sunset radial washes for juice, fixed so they don't scroll-jank. */
   background-image:
-    radial-gradient(120% 60% at 50% -10%, rgba(243, 211, 220, 0.55), transparent 60%);
+    radial-gradient(120% 55% at 50% -8%, rgba(255, 138, 61, 0.22), transparent 60%),
+    radial-gradient(90% 45% at 100% 0%, rgba(255, 122, 154, 0.20), transparent 55%);
   background-attachment: fixed;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
@@ -107,14 +116,15 @@ body {
   border-radius: var(--radius);
   padding: 14px 18px;
   cursor: pointer;
-  transition: transform var(--transition), box-shadow var(--transition),
+  transition: transform var(--spring), box-shadow var(--transition),
               background var(--transition), filter var(--transition);
   min-height: 52px;            /* big touch target */
 }
-.btn:active { transform: translateY(1px) scale(0.99); }
+.btn:active { transform: scale(0.95); transition: transform 90ms ease; }
 
 .btn-primary {
-  background: linear-gradient(135deg, var(--rose), var(--primary));
+  background: var(--grad-sunset);
+  background-size: 160% 160%;
   color: #fff;
   box-shadow: var(--shadow-md);
 }
@@ -154,7 +164,9 @@ body {
   box-shadow: var(--shadow-sm);
   transition: transform var(--transition);
 }
-.icon-btn:active { transform: scale(0.94); }
+.icon-btn { transition: transform var(--spring), box-shadow var(--transition); }
+.icon-btn:hover { box-shadow: var(--shadow-md); }
+.icon-btn:active { transform: scale(0.88) rotate(-8deg); transition: transform 90ms ease; }
 
 /* Blocks / cards ---------------------------------------------------------- */
 .block {
@@ -206,14 +218,19 @@ body {
   color: var(--ink);
   cursor: pointer;
   box-shadow: var(--shadow-sm);
-  transition: transform var(--transition);
+  transition: transform var(--spring), box-shadow var(--transition);
   min-height: 44px;
 }
-.chip:active { transform: scale(0.96); }
+.chip:hover { transform: translateY(-2px) rotate(-1deg); box-shadow: var(--shadow-md); }
+.chip:active { transform: scale(0.92); transition: transform 90ms ease; }
 .chip .dot {
   width: 14px; height: 14px; border-radius: 50%;
-  box-shadow: inset 0 0 0 2px rgba(255,255,255,0.5);
+  /* Glossy sheen: soft white highlight up top fading into the category color. */
+  background-image: radial-gradient(circle at 32% 28%, rgba(255,255,255,0.85), rgba(255,255,255,0) 55%);
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,0.5), 0 1px 3px rgba(50,30,39,0.25);
 }
+/* Pop-in when a chip first appears */
+.chip { animation: pop-in var(--spring) both; }
 
 /* Sequence list ----------------------------------------------------------- */
 .seq-list { list-style: none; margin: 0; padding: 0; }
@@ -226,7 +243,14 @@ body {
   background: var(--bg);
   margin-bottom: 8px;
 }
-.seq-color { width: 12px; height: 36px; border-radius: 6px; flex-shrink: 0; }
+.seq-color {
+  width: 12px; height: 36px; border-radius: 6px; flex-shrink: 0;
+  /* Glossy vertical sheen over the category color. */
+  background-image: linear-gradient(120deg, rgba(255,255,255,0.55), rgba(255,255,255,0) 60%);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.25);
+}
+/* Newly added segment pops in (class added by JS, then removed). */
+.seq-item.just-added { animation: pop-in var(--spring) both; }
 .seq-main { flex: 1; min-width: 0; }
 .seq-label { font-weight: 800; }
 .seq-dur {
@@ -426,11 +450,11 @@ body {
   font-weight: 700;
   font-size: 0.82rem;
   box-shadow: var(--shadow-sm);
-  transition: transform var(--transition);
+  transition: transform var(--spring), box-shadow var(--transition);
 }
-.ctrl-btn:active { transform: scale(0.95); }
+.ctrl-btn:active { transform: scale(0.9); transition: transform 90ms ease; }
 .ctrl-primary {
-  background: linear-gradient(135deg, var(--rose), var(--primary));
+  background: var(--grad-sunset);
   color: #fff;
   width: 110px;
   box-shadow: var(--shadow-md);
@@ -527,15 +551,60 @@ body {
   color: #fff;
   font-weight: 800;
   padding: 12px 22px;
-  border-radius: 999px;
+  border-radius: 18px;
   box-shadow: var(--shadow-md);
   z-index: 80;
+  max-width: min(90vw, 460px);
+  text-align: center;
   animation: fade-in var(--transition);
 }
 
 /* Animations -------------------------------------------------------------- */
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+
+/* Springy pop-in for freshly rendered chips / segments. */
+@keyframes pop-in {
+  0%   { opacity: 0; transform: scale(0.6) translateY(6px); }
+  60%  { opacity: 1; transform: scale(1.06); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Ring "heartbeat" — a quick bloom on each second tick during a run. */
+.ring-progress.tick { animation: ring-pulse 600ms ease-out; }
+@keyframes ring-pulse {
+  0%   { stroke-width: 14; filter: none; }
+  35%  { stroke-width: 18; filter: drop-shadow(0 0 6px rgba(255, 138, 61, 0.7)); }
+  100% { stroke-width: 14; filter: none; }
+}
+/* The big countdown number gives a subtle squash on each tick too. */
+.run-time.tick { animation: time-bump 600ms ease-out; }
+@keyframes time-bump {
+  0%, 100% { transform: scale(1); }
+  30%      { transform: scale(1.05); }
+}
+
+/* Completion celebration — a burst of falling petals. */
+.celebrate {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 90;
+}
+.petal {
+  position: absolute;
+  top: -8vh;
+  font-size: 22px;
+  line-height: 1;
+  will-change: transform, opacity;
+  animation: petal-fall var(--fall, 2.6s) cubic-bezier(0.4, 0, 0.7, 1) forwards;
+}
+@keyframes petal-fall {
+  0%   { transform: translateY(-10vh) translateX(0) rotate(0deg); opacity: 0; }
+  10%  { opacity: 1; }
+  100% { transform: translateY(110vh) translateX(var(--drift, 30px)) rotate(var(--spin, 540deg)); opacity: 0; }
+}
 
 /* Accessibility: honor reduced motion ------------------------------------- */
 @media (prefers-reduced-motion: reduce) {
