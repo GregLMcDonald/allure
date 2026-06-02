@@ -200,6 +200,29 @@
         </span>
       </label>
 
+      <div class="set-field">
+        <label for="select-soundscape" class="set-label">Ambiance sonore</label>
+        <select id="select-soundscape" class="select">
+          <option value="none">Aucune</option>
+          <option value="music">Musique entraînante</option>
+          <option value="cadence">Cadence (métronome)</option>
+          <option value="both">Musique + cadence</option>
+        </select>
+        <div id="song-bpm-field" hidden>
+          <p class="set-label" style="margin-bottom: 4px;">Tempo par morceau (BPM)</p>
+          <div id="song-bpm-list"></div>
+          <p class="hint">Un morceau par catégorie se règle dans « Catégories ».</p>
+        </div>
+        <div id="cadence-field" hidden>
+          <label for="range-cadence" class="set-label">
+            Cadence : <span id="cadence-bpm-label">160</span> pas/min
+          </label>
+          <input id="range-cadence" class="range" type="range" min="100" max="180" step="1" value="160" />
+        </div>
+        <p class="hint">Sons synthétisés dans l'app, joués pendant la course (au premier plan).</p>
+        <button id="btn-preview-soundscape" class="btn btn-soft" type="button">Écouter un aperçu</button>
+      </div>
+
       <p class="fine-print">
         Lecture en arrière-plan : les annonces fonctionnent de façon fiable quand l'app
         est au premier plan, écran allumé. Écran éteint ou app en arrière-plan, le

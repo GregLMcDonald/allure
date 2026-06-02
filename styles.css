@@ -537,6 +537,45 @@ body {
   color: var(--ink);
   margin-bottom: 8px;
 }
+.range {
+  width: 100%;
+  margin: 4px 0 10px;
+  accent-color: var(--accent);
+  height: 28px;
+  cursor: pointer;
+}
+#cadence-field { margin-top: 4px; }
+
+/* Per-song tempo rows in Settings */
+.song-bpm-row { margin-bottom: 6px; }
+.song-bpm-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-weight: 700;
+  font-size: 0.92rem;
+}
+.song-bpm-val {
+  color: var(--primary-deep);
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+
+/* Song picker in the category manager (wraps to its own line under the row) */
+.cat-row { flex-wrap: wrap; }
+.cat-song {
+  flex-basis: 100%;
+  border: 1px solid var(--blush);
+  border-radius: 10px;
+  padding: 9px 10px;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 0.9rem;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
 .fine-print {
   color: var(--muted);
   font-size: 0.82rem;

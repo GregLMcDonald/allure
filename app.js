@@ -29,6 +29,67 @@ const STORAGE_KEY = "allure.state.v1";
 const RING_RADIUS = 108;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS; // ≈ 678.58
 
+/* ----------------------------------------------------------------------- */
+/* Song library — each is a chord progression + arrangement in the         */
+/* rhythmic-stab style. A category points at one of these; the music       */
+/* switches when the run moves to a segment of that category. Each song    */
+/* carries a default BPM (user-overridable per song in Settings).          */
+/* Defined up here so loadState()/validateState() can reference it.        */
+/* stab = 16th-note steps that fire a chord stab; bassMod/arpMod = play on  */
+/* every Nth 16th; prog bars = { bass(Hz), triad:[Hz,Hz,Hz] }.             */
+/* ----------------------------------------------------------------------- */
+const SONGS = [
+  {
+    // Bright pop — syncopated OFFBEAT stabs over a relentless eighth bass.
+    id: "lever", name: "Lever du jour", defBpm: 124, stabWave: "sawtooth",
+    stab: [2, 6, 10, 14], bassMod: 2, arpMod: 2, shaker: true, clap: false,
+    prog: [ // C–G–Am–F  (I–V–vi–IV, major)
+      { bass: 65.41,  triad: [261.63, 329.63, 392.00] }, // C
+      { bass: 98.00,  triad: [196.00, 246.94, 293.66] }, // G
+      { bass: 110.00, triad: [220.00, 261.63, 329.63] }, // Am
+      { bass: 87.31,  triad: [174.61, 220.00, 261.63] }, // F
+    ],
+  },
+  {
+    // Driving four-on-the-floor — ON-beat stabs + backbeat clap, anthemic minor.
+    id: "asphalte", name: "Asphalte", defBpm: 144, stabWave: "sawtooth",
+    stab: [0, 4, 8, 12], bassMod: 2, arpMod: 0, shaker: true, clap: true,
+    prog: [ // Em–C–G–D  (i–VI–III–VII, E minor)
+      { bass: 82.41, triad: [196.00, 246.94, 329.63] }, // Em (G B E)
+      { bass: 65.41, triad: [261.63, 329.63, 392.00] }, // C
+      { bass: 98.00, triad: [196.00, 246.94, 293.66] }, // G
+      { bass: 73.42, triad: [220.00, 293.66, 369.99] }, // D (A D F#)
+    ],
+  },
+  {
+    // Synthwave — fast SIXTEENTH arp lead, sparse stabs, spacious quarter bass.
+    id: "neon", name: "Néon", defBpm: 112, stabWave: "square",
+    stab: [0, 8], bassMod: 4, arpMod: 1, shaker: false, clap: false,
+    prog: [ // Cm–A♭–E♭–B♭  (moody minor)
+      { bass: 65.41,  triad: [261.63, 311.13, 392.00] }, // Cm
+      { bass: 103.83, triad: [207.65, 261.63, 311.13] }, // Ab
+      { bass: 77.78,  triad: [311.13, 392.00, 466.16] }, // Eb
+      { bass: 116.54, triad: [233.08, 293.66, 349.23] }, // Bb
+    ],
+  },
+  {
+    // Calm recovery — sparse half-note stabs, slow, no percussion.
+    id: "recup", name: "Récup", defBpm: 92, stabWave: "triangle",
+    stab: [0, 8], bassMod: 4, arpMod: 4, shaker: false, clap: false,
+    prog: [ // Cmaj7–Fmaj7  (mellow)
+      { bass: 65.41, triad: [329.63, 392.00, 493.88] }, // Cmaj7 (E G B)
+      { bass: 87.31, triad: [220.00, 261.63, 329.63] }, // Fmaj7 (A C E)
+    ],
+  },
+];
+const SONG_IDS = SONGS.map((s) => s.id);
+function getSong(id) { return SONGS.find((s) => s.id === id) || null; }
+function songBpmDefaults() {
+  const m = {};
+  SONGS.forEach((s) => { m[s.id] = s.defBpm; });
+  return m;
+}
+
 // A unique id generator that doesn't rely on crypto (broad support).
 let _idCounter = 0;
 function uid(prefix) {
@@ -44,9 +105,9 @@ function uid(prefix) {
 function defaultState() {
   return {
     categories: [
-      { id: "cat_marche", label: "marche", color: "#4ECBA5" }, // fresh mint
-      { id: "cat_v1", label: "v1", color: "#FF8A3D" },         // tangerine
-      { id: "cat_v2", label: "v2", color: "#B5184C" },         // punchy wine
+      { id: "cat_marche", label: "marche", color: "#4ECBA5", song: "recup" },    // fresh mint
+      { id: "cat_v1", label: "v1", color: "#FF8A3D", song: "lever" },            // tangerine
+      { id: "cat_v2", label: "v2", color: "#B5184C", song: "asphalte" },         // punchy wine
     ],
     sequence: [], // [{ categoryId, durationSeconds }]
     presets: [],  // [{ id, name, segments }]
@@ -55,6 +116,9 @@ function defaultState() {
       keepScreenAwake: false,
       beeps: false,
       voiceURI: null,
+      soundscape: "none", // none | music | cadence | both
+      cadenceBpm: 160,     // metronome cadence (steps/min), 100–180
+      songBpm: songBpmDefaults(), // per-song music tempo, 80–180
     },
   };
 }
@@ -96,6 +160,7 @@ function validateState(input) {
         id: typeof c.id === "string" ? c.id : uid("cat"),
         label: typeof c.label === "string" && c.label.trim() ? c.label : "catégorie",
         color: typeof c.color === "string" ? c.color : "#FF7A9A",
+        song: SONG_IDS.includes(c.song) || c.song === "none" ? c.song : SONG_IDS[0],
       }));
     if (cats.length) out.categories = cats;
   }
@@ -135,6 +200,18 @@ function validateState(input) {
         typeof input.settings.voiceURI === "string"
           ? input.settings.voiceURI
           : null,
+      soundscape: ["none", "music", "cadence", "both"].includes(input.settings.soundscape)
+        ? input.settings.soundscape
+        : "none",
+      cadenceBpm: clampBpm(input.settings.cadenceBpm),
+      songBpm: (() => {
+        const src = input.settings.songBpm || {};
+        const m = {};
+        SONGS.forEach((s) => {
+          m[s.id] = clampSongBpm(src[s.id] != null ? src[s.id] : s.defBpm);
+        });
+        return m;
+      })(),
     };
   }
 
@@ -257,6 +334,13 @@ const els = {
   btnTestVoice: $("btn-test-voice"),
   toggleWakelock: $("toggle-wakelock"),
   toggleBeeps: $("toggle-beeps"),
+  selectSoundscape: $("select-soundscape"),
+  songBpmField: $("song-bpm-field"),
+  songBpmList: $("song-bpm-list"),
+  cadenceField: $("cadence-field"),
+  rangeCadence: $("range-cadence"),
+  cadenceBpmLabel: $("cadence-bpm-label"),
+  btnPreviewSoundscape: $("btn-preview-soundscape"),
   // run screen
   ringProgress: $("ring-progress"),
   runTime: $("run-time"),
@@ -637,9 +721,44 @@ function renderCategoryEditor() {
       renderCategoryEditor();
     }, true);
 
+    // Song picker — which generative track plays during this category's segments.
+    const song = document.createElement("select");
+    song.className = "cat-song";
+    song.setAttribute("aria-label", "Musique de " + cat.label);
+    const noneOpt = document.createElement("option");
+    noneOpt.value = "none";
+    noneOpt.textContent = "♪ Aucune";
+    song.appendChild(noneOpt);
+    SONGS.forEach((s) => {
+      const opt = document.createElement("option");
+      opt.value = s.id;
+      opt.textContent = "♪ " + s.name;
+      song.appendChild(opt);
+    });
+    song.value = cat.song || SONG_IDS[0];
+    song.addEventListener("change", () => {
+      cat.song = song.value;
+      saveState();
+      const cur = currentSegment();
+      if (run.active) {
+        // If a segment of this category is playing right now, switch live.
+        if (
+          cur && cur.categoryId === cat.id &&
+          scape.running && (scape.mode === "music" || scape.mode === "both")
+        ) {
+          scape.songId = activeSongId();
+          scape.step = 0;
+        }
+      } else {
+        // Not running — play a short sample so the user hears their pick.
+        previewSong(song.value);
+      }
+    });
+
     row.appendChild(color);
     row.appendChild(label);
     row.appendChild(del);
+    row.appendChild(song);
     box.appendChild(row);
   });
 }
@@ -652,7 +771,7 @@ function addCategory() {
   // Pick a default color from the rose ramp, rotating through it.
   const palette = ["#FF7A9A", "#FF8A3D", "#FFC15E", "#4ECBA5", "#B5184C", "#B05CFF"];
   const color = palette[state.categories.length % palette.length];
-  state.categories.push({ id: uid("cat"), label: clean, color });
+  state.categories.push({ id: uid("cat"), label: clean, color, song: SONG_IDS[0] });
   saveState();
   renderChips();
   renderCategoryEditor();
@@ -812,9 +931,10 @@ function speak(text, useVoice) {
     const release = () => {
       const i = _utterances.indexOf(u);
       if (i !== -1) _utterances.splice(i, 1);
+      duckSoundscape(false); // restore music volume after the cue
     };
     let started = false;
-    u.onstart = () => { started = true; _speechEverStarted = true; };
+    u.onstart = () => { started = true; _speechEverStarted = true; duckSoundscape(true); };
     u.onend = release;
     u.onerror = (e) => {
       release();
@@ -892,9 +1012,16 @@ function countdownTick(isLast) {
   tone(isLast ? 1174.7 : 740, 0, isLast ? 0.2 : 0.13, isLast ? 0.24 : 0.16);
 }
 
+// Briefly duck the music under a chime, then restore.
+function duckForChime(ms) {
+  duckSoundscape(true);
+  setTimeout(() => duckSoundscape(false), ms);
+}
+
 // Two-note rising carillon at a segment transition (gated by the Sons toggle).
 function chimeTransition() {
   if (!state.settings.beeps) return;
+  duckForChime(700);
   tone(587.33, 0, 0.16, 0.18, "sine");   // D5
   tone(880.0, 0.1, 0.24, 0.18, "sine");  // A5
 }
@@ -902,6 +1029,7 @@ function chimeTransition() {
 // Cheerful ascending arpeggio for "séance terminée" (gated by the Sons toggle).
 function chimeFinish() {
   if (!state.settings.beeps) return;
+  duckForChime(1100);
   const notes = [
     [523.25, 0.0, 0.22],   // C5
     [659.25, 0.13, 0.22],  // E5
@@ -909,6 +1037,323 @@ function chimeFinish() {
     [1046.5, 0.4, 0.5],    // C6 (held)
   ];
   notes.forEach(([f, o, d]) => tone(f, o, d, 0.2, "triangle"));
+}
+
+/* ----------------------------------------------------------------------- */
+/* 8b. Procedural soundscape — generative upbeat music + cadence metronome  */
+/*     Foreground-only. Everything is synthesised on the Web Audio clock;   */
+/*     no audio files are bundled.                                          */
+/* ----------------------------------------------------------------------- */
+
+const SCHED_INTERVAL_MS = 25;   // how often the lookahead scheduler runs
+const SCHED_AHEAD = 0.18;       // schedule notes this far ahead (s)
+
+function clampSongBpm(b) {
+  const n = Math.round(Number(b) || 120);
+  return Math.min(180, Math.max(80, n));
+}
+function songTempo(song) {
+  const v = state.settings.songBpm && state.settings.songBpm[song.id];
+  return clampSongBpm(v != null ? v : song.defBpm);
+}
+// Which song should play right now, taken from the active segment's category.
+function activeSongId() {
+  const seg = currentSegment();
+  const cat = seg ? getCategory(seg.categoryId) : null;
+  const id = cat && cat.song ? cat.song : SONG_IDS[0];
+  if (id === "none") return "none";
+  return getSong(id) ? id : SONG_IDS[0];
+}
+
+const scape = {
+  running: false,
+  mode: "none",
+  master: null,        // duckable master gain for the whole soundscape
+  timer: null,
+  step: 0,             // 16th-note counter (music)
+  songId: null,        // id of the song currently playing (from the active segment)
+  nextNoteTime: 0,     // next music 16th to schedule (audioCtx time)
+  beat: 0,             // cadence beat counter
+  nextClickTime: 0,    // next metronome click (audioCtx time)
+  noiseBuf: null,      // cached white-noise buffer for the shaker
+  previewTimer: null,
+};
+
+function clampBpm(b) {
+  const n = Math.round(Number(b) || 140);
+  return Math.min(180, Math.max(100, n));
+}
+
+function scapeMaster() {
+  if (!audioCtx) return null;
+  if (!scape.master) {
+    scape.master = audioCtx.createGain();
+    scape.master.gain.value = 1.0;
+    scape.master.connect(audioCtx.destination);
+  }
+  return scape.master;
+}
+
+function noiseBuffer() {
+  if (scape.noiseBuf) return scape.noiseBuf;
+  const len = Math.floor(audioCtx.sampleRate * 0.1);
+  const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  scape.noiseBuf = buf;
+  return buf;
+}
+
+// ---- Individual voices (each a short, self-stopping one-shot) ----
+
+function playBass(time, freq) {
+  const o = audioCtx.createOscillator();
+  const f = audioCtx.createBiquadFilter();
+  const g = audioCtx.createGain();
+  o.type = "sawtooth";
+  o.frequency.setValueAtTime(freq, time);
+  f.type = "lowpass"; f.frequency.value = 380;
+  g.gain.setValueAtTime(0.0001, time);
+  g.gain.exponentialRampToValueAtTime(0.17, time + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, time + 0.19);
+  o.connect(f); f.connect(g); g.connect(scape.master);
+  o.start(time); o.stop(time + 0.21);
+}
+
+function playPluck(time, freq) {
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = "triangle";
+  o.frequency.setValueAtTime(freq, time);
+  g.gain.setValueAtTime(0.0001, time);
+  g.gain.exponentialRampToValueAtTime(0.12, time + 0.005);
+  g.gain.exponentialRampToValueAtTime(0.0001, time + 0.22);
+  o.connect(g); g.connect(scape.master);
+  o.start(time); o.stop(time + 0.24);
+}
+
+// Rhythmic chord stab — short, punchy synth-pop hit. Voiced an octave up to
+// clear the bass; a quick filter "snap" gives it that plucky stab character.
+function playStab(time, triad, wave) {
+  const f = audioCtx.createBiquadFilter();
+  const g = audioCtx.createGain();
+  f.type = "lowpass";
+  f.Q.value = 5;
+  f.frequency.setValueAtTime(3400, time);                  // snap open...
+  f.frequency.exponentialRampToValueAtTime(800, time + 0.16); // ...then close
+  g.gain.setValueAtTime(0.0001, time);
+  g.gain.exponentialRampToValueAtTime(0.085, time + 0.008); // fast attack
+  g.gain.exponentialRampToValueAtTime(0.0001, time + 0.2);  // short decay
+  f.connect(g); g.connect(scape.master);
+  triad.forEach((fr, i) => {
+    const o = audioCtx.createOscillator();
+    o.type = wave || "sawtooth";
+    o.frequency.setValueAtTime(fr * 2, time); // octave up, above the bass/arp mud
+    o.detune.value = (i - 1) * 8;             // slight width
+    o.connect(f);
+    o.start(time); o.stop(time + 0.22);
+  });
+}
+
+function playShaker(time, accent) {
+  const dur = 0.05;
+  const src = audioCtx.createBufferSource();
+  const f = audioCtx.createBiquadFilter();
+  const g = audioCtx.createGain();
+  src.buffer = noiseBuffer();
+  f.type = "highpass"; f.frequency.value = 7000;
+  g.gain.setValueAtTime(0.0001, time);
+  g.gain.exponentialRampToValueAtTime(accent ? 0.11 : 0.055, time + 0.005);
+  g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+  src.connect(f); f.connect(g); g.connect(scape.master);
+  src.start(time); src.stop(time + dur + 0.02);
+}
+
+function playClap(time) {
+  const dur = 0.09;
+  const src = audioCtx.createBufferSource();
+  const f = audioCtx.createBiquadFilter();
+  const g = audioCtx.createGain();
+  src.buffer = noiseBuffer();
+  f.type = "bandpass"; f.frequency.value = 1500; f.Q.value = 0.7;
+  g.gain.setValueAtTime(0.0001, time);
+  g.gain.exponentialRampToValueAtTime(0.14, time + 0.005);
+  g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+  src.connect(f); f.connect(g); g.connect(scape.master);
+  src.start(time); src.stop(time + dur + 0.02);
+}
+
+function playClick(time, accent) {
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = "square";
+  o.frequency.setValueAtTime(accent ? 1600 : 1100, time);
+  g.gain.setValueAtTime(0.0001, time);
+  g.gain.exponentialRampToValueAtTime(accent ? 0.2 : 0.12, time + 0.004);
+  g.gain.exponentialRampToValueAtTime(0.0001, time + 0.05);
+  o.connect(g); g.connect(scape.master);
+  o.start(time); o.stop(time + 0.06);
+}
+
+// ---- Sequencers ----
+
+function musicScheduler() {
+  const song = getSong(scape.songId);
+  // "Aucune" (or unknown) → no music for this segment; advance the clock silently.
+  if (!song) {
+    const sx = 60 / 120 / 4;
+    while (scape.nextNoteTime < audioCtx.currentTime + SCHED_AHEAD) {
+      scape.nextNoteTime += sx; scape.step++;
+    }
+    return;
+  }
+  const sixteenth = 60 / songTempo(song) / 4;
+  while (scape.nextNoteTime < audioCtx.currentTime + SCHED_AHEAD) {
+    const t = scape.nextNoteTime;
+    const bar = Math.floor(scape.step / 16) % song.prog.length;
+    const inBar = scape.step % 16;
+    const chord = song.prog[bar];
+
+    if (song.stab.includes(inBar)) playStab(t, chord.triad, song.stabWave); // chord stabs
+    if (inBar % song.bassMod === 0) playBass(t, chord.bass);                // driving bass
+    if (song.arpMod && inBar % song.arpMod === 0) {                         // melodic arp
+      const arp = [
+        chord.triad[0], chord.triad[1], chord.triad[2], chord.triad[1] * 2,
+        chord.triad[0] * 2, chord.triad[2], chord.triad[1], chord.triad[0] * 2,
+      ];
+      playPluck(t, arp[Math.floor(inBar / song.arpMod) % arp.length]);
+    }
+    if (song.shaker && inBar % 4 === 2) playShaker(t, inBar === 10);        // offbeat groove
+    if (song.clap && (inBar === 4 || inBar === 12)) playClap(t);            // backbeat clap
+
+    scape.nextNoteTime += sixteenth;
+    scape.step++;
+  }
+}
+
+function cadenceScheduler() {
+  const period = 60 / clampBpm(state.settings.cadenceBpm);
+  while (scape.nextClickTime < audioCtx.currentTime + SCHED_AHEAD) {
+    playClick(scape.nextClickTime, scape.beat % 4 === 0);
+    scape.nextClickTime += period;
+    scape.beat++;
+  }
+}
+
+function scapeTick() {
+  if (!audioCtx) return;
+  if (scape.mode === "music" || scape.mode === "both") musicScheduler();
+  if (scape.mode === "cadence" || scape.mode === "both") cadenceScheduler();
+}
+
+// ---- Lifecycle ----
+
+// opts (optional): { mode, songId } to force a specific mode/song — used by
+// previews. Without opts it follows the saved settings + active segment.
+function startSoundscape(opts) {
+  if (!audioCtx) return;
+  const mode = (opts && opts.mode) || state.settings.soundscape;
+  if (!mode || mode === "none" || scape.running) return;
+  scapeMaster();
+  const now = audioCtx.currentTime;
+  scape.master.gain.cancelScheduledValues(now);
+  scape.master.gain.setValueAtTime(1.0, now); // un-duck on (re)start
+  scape.running = true;
+  scape.mode = mode;
+  scape.step = 0;
+  scape.beat = 0;
+  scape.songId = (opts && opts.songId) || activeSongId();
+  const t0 = now + 0.1;
+  scape.nextNoteTime = t0;
+  scape.nextClickTime = t0;
+  scape.timer = setInterval(scapeTick, SCHED_INTERVAL_MS);
+}
+
+function stopSoundscape() {
+  scape.running = false;
+  scape.mode = "none";
+  if (scape.timer) { clearInterval(scape.timer); scape.timer = null; }
+  if (scape.previewTimer) { clearTimeout(scape.previewTimer); scape.previewTimer = null; }
+  // Voices are short scheduled one-shots, so they tail off on their own.
+}
+
+// Smoothly dip the music while a voice cue / chime plays, then restore.
+function duckSoundscape(active) {
+  if (!scape.master || !audioCtx || !scape.running) return;
+  const now = audioCtx.currentTime;
+  const target = active ? 0.3 : 1.0;
+  scape.master.gain.cancelScheduledValues(now);
+  scape.master.gain.setValueAtTime(scape.master.gain.value, now);
+  scape.master.gain.linearRampToValueAtTime(target, now + (active ? 0.08 : 0.6));
+}
+
+// Settings preview — play the current selection for a few seconds (not during a run).
+function previewSoundscape() {
+  if (run.active) return;
+  unlockAudio();
+  stopSoundscape();
+  startSoundscape();
+  if (!scape.running) { showToast("Choisis une ambiance"); return; }
+  scape.previewTimer = setTimeout(stopSoundscape, 7000);
+}
+
+// Audition a specific song for a couple of bars — used when picking a song for
+// a category. Skipped during a run (the live switch handles that instead).
+function previewSong(id) {
+  if (run.active || !id || id === "none") return;
+  unlockAudio();
+  stopSoundscape();
+  startSoundscape({ mode: "music", songId: id });
+  if (!scape.running) return;
+  scape.previewTimer = setTimeout(stopSoundscape, 3500);
+}
+
+// Show the per-song tempo list for music modes, and the cadence slider for
+// metronome modes.
+function syncSoundscapeFields() {
+  const mode = els.selectSoundscape.value;
+  els.songBpmField.hidden = !(mode === "music" || mode === "both");
+  els.cadenceField.hidden = !(mode === "cadence" || mode === "both");
+}
+
+// Render one tempo slider per song in the Settings sheet.
+function renderSongBpms() {
+  const box = els.songBpmList;
+  box.innerHTML = "";
+  SONGS.forEach((song) => {
+    const row = document.createElement("div");
+    row.className = "song-bpm-row";
+
+    const head = document.createElement("div");
+    head.className = "song-bpm-head";
+    const name = document.createElement("span");
+    name.textContent = song.name;
+    const val = document.createElement("span");
+    val.className = "song-bpm-val";
+    const bpm = songTempo(song);
+    val.textContent = bpm + " BPM";
+    head.appendChild(name);
+    head.appendChild(val);
+
+    const range = document.createElement("input");
+    range.type = "range";
+    range.className = "range";
+    range.min = "80"; range.max = "180"; range.step = "1";
+    range.value = String(bpm);
+    range.setAttribute("aria-label", "Tempo " + song.name);
+    range.addEventListener("input", () => {
+      const v = clampSongBpm(range.value);
+      state.settings.songBpm[song.id] = v;
+      val.textContent = v + " BPM";
+      saveState();
+      // If this song is playing right now, the scheduler picks up the new
+      // tempo automatically on its next note.
+    });
+
+    row.appendChild(head);
+    row.appendChild(range);
+    box.appendChild(row);
+  });
 }
 
 function vibrate(pattern) {
@@ -1044,6 +1489,8 @@ function startRun() {
   run.segments = state.sequence.map((s) => ({ ...s }));
   run.index = 0;
 
+  startSoundscape(); // now that run.segments is set, picks the right starting song
+
   showScreen("run");
   beginSegment(0, /*announce*/ true);
   maybeWarnNoSpeech(); // hint once if this browser's TTS is wedged
@@ -1070,6 +1517,13 @@ function beginSegment(index, announce) {
   els.runNext.textContent = next ? `Suivant : ${next}` : "Dernier segment";
 
   updateMediaSessionMetadata();
+
+  // Switch the music to this segment's song, restarting at bar 1 for a clean
+  // "new section" feel.
+  if (scape.running && (scape.mode === "music" || scape.mode === "both")) {
+    scape.songId = activeSongId();
+    scape.step = 0;
+  }
 
   // Cues
   if (announce) {
@@ -1220,6 +1674,7 @@ function stopRunInternals() {
   if (run.rafId) cancelAnimationFrame(run.rafId);
   run.rafId = null;
   stopSilentAudio();
+  stopSoundscape();
   releaseWakeLock();
   if ("mediaSession" in navigator) {
     try { navigator.mediaSession.playbackState = "none"; } catch (e) {}
@@ -1235,6 +1690,7 @@ function pauseRun() {
   els.screenRun.classList.add("is-paused");
   setPlayPauseUI(true);
   updateMediaSessionMetadata();
+  stopSoundscape();
   // Pause spoken cues too.
   try { window.speechSynthesis.pause(); } catch (e) {}
 }
@@ -1248,6 +1704,7 @@ function resumeRun() {
   setPlayPauseUI(false);
   updateMediaSessionMetadata();
   acquireWakeLock();
+  startSoundscape();
   try { window.speechSynthesis.resume(); } catch (e) {}
 }
 
@@ -1389,6 +1846,11 @@ function bindEvents() {
     renderVoiceOptions();
     els.toggleWakelock.checked = state.settings.keepScreenAwake;
     els.toggleBeeps.checked = state.settings.beeps;
+    els.selectSoundscape.value = state.settings.soundscape;
+    els.rangeCadence.value = String(state.settings.cadenceBpm);
+    els.cadenceBpmLabel.textContent = String(state.settings.cadenceBpm);
+    renderSongBpms();
+    syncSoundscapeFields();
     openModal(els.modalSettings);
   });
   els.selectVoice.addEventListener("change", () => {
@@ -1413,6 +1875,25 @@ function bindEvents() {
     state.settings.beeps = els.toggleBeeps.checked;
     saveState();
   });
+
+  // Soundscape (generative music / cadence)
+  els.selectSoundscape.addEventListener("change", () => {
+    state.settings.soundscape = els.selectSoundscape.value;
+    saveState();
+    syncSoundscapeFields();
+    // Apply live if a run is in progress.
+    if (run.active && !run.paused) {
+      stopSoundscape();
+      startSoundscape();
+    }
+  });
+  els.rangeCadence.addEventListener("input", () => {
+    state.settings.cadenceBpm = clampBpm(els.rangeCadence.value);
+    els.cadenceBpmLabel.textContent = String(state.settings.cadenceBpm);
+    saveState();
+    // Tempo change is picked up by the running scheduler automatically.
+  });
+  els.btnPreviewSoundscape.addEventListener("click", previewSoundscape);
 
   // Presets
   els.btnSavePreset.addEventListener("click", saveCurrentAsPreset);
