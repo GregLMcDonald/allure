@@ -6,30 +6,42 @@ chronométrés (chacun = une catégorie + une durée), puis un minuteur fait le
 décompte et **annonce chaque segment à voix haute** (synthèse vocale du
 navigateur). Toute l'interface est en français.
 
-> Style inspiré de l'esprit de **Les Roses** (lesroses.ca) : chaleureux,
-> élégant, encourageant — la progression plutôt que la compétition.
+> Esprit chaleureux et encourageant : la progression plutôt que la compétition.
 
 ---
 
 ## Fonctionnalités
 
-- **Composeur** : catégories tappables (par défaut `marche`, `v1`, `v2`),
-  ajout de segments avec durée en `mm:ss`, réorganisation, édition, suppression.
-- **Catégories éditables** : ajouter, renommer, recolorer, supprimer.
+- **Composeur** : catégories tappables (par défaut `marche`, `v1`, `v2`).
+  Touche une catégorie pour ajouter un segment ; la durée se règle dans un
+  **sélecteur in-app** (boutons −/+ par tranches de 15 s + raccourcis 0:30 →
+  5:00). Réorganisation, édition (touche la durée d'un segment) et suppression.
+- **Catégories éditables** : ajouter, renommer, recolorer, supprimer, et
+  **associer un morceau de musique** à chacune.
 - **Séquences enregistrées** (presets) + **export / import JSON**.
 - **Boucle** de la séquence entière.
-- **Écran de course** : grand décompte central, anneau de progression
-  circulaire (SVG), catégorie en cours + « Suivant : … », Pause/Reprendre,
-  Suivant, Précédent, Arrêter.
+- **Écran de course** : grand décompte central, anneau de progression circulaire
+  (SVG) qui pulse à chaque seconde, catégorie en cours + « Suivant : … »,
+  Pause/Reprendre, Suivant, Précédent, Arrêter, et une **pluie de pétales** à la
+  fin de la séance.
 - **Annonces vocales en français** au début de chaque segment
   (« Marche, deux minutes »), avec choix de la voix.
+- **Sons** optionnels : bips 3-2-1 avant chaque transition, carillon de
+  transition et arpège de fin (un seul réglage « Sons »).
+- **Ambiance sonore générative** (au premier plan, voir limites) : quatre
+  morceaux entièrement **synthétisés dans l'app** (aucun fichier audio) —
+  *Lever du jour*, *Asphalte*, *Néon*, *Récup* — un par catégorie, donc **la
+  musique change selon le segment**. Tempo réglable **par morceau**, **métronome
+  de cadence** optionnel, et la musique **baisse automatiquement (duck)** sous
+  les annonces et carillons.
 - **Vibration** à chaque changement de segment (repli silencieux).
-- **Bips 3-2-1** optionnels avant chaque transition.
 - **Minuteur basé sur l'horloge** (timestamps) : il se corrige tout seul après
   une mise en arrière-plan.
 - **PWA** : installable, fonctionne hors-ligne (service worker), icônes.
-- **Wake Lock** (« Garder l'écran allumé ») + **MediaSession** + audio quasi
-  silencieux pour la lecture en arrière-plan (meilleur effort, voir limites).
+- **Wake Lock** (« Garder l'écran allumé ») + **MediaSession**.
+
+Style : palette « Juicy sunset » (rose / corail / mangue) et police **Fredoka**,
+toutes deux dans les variables CSS de `:root` ([`styles.css`](styles.css)).
 
 Tout est en **HTML / CSS / JavaScript natif**, sans framework ni étape de
 compilation. L'app tourne directement à partir des fichiers statiques.
@@ -71,55 +83,25 @@ Pour publier une mise à jour : incrémente `CACHE_VERSION` dans
 
 ---
 
-## Lecture en arrière-plan et « ducking » — limites honnêtes
+## Audio & arrière-plan — limites honnêtes
 
-Tu veux verrouiller le téléphone, écouter ta musique dans une autre app, et
-recevoir quand même les annonces vocales (idéalement en baissant la musique).
-**La plateforme web ne le permet que partiellement**, et le comportement
-diffère entre iOS Safari et Android Chrome. Voici ce qui est implémenté et ce
-qu'il faut en attendre.
+L'app est **fiable au premier plan, écran allumé**. Dès que l'écran s'éteint ou
+que l'app passe en arrière-plan, le navigateur suspend la boucle d'animation et
+le contexte audio : le minuteur se fige et les annonces / la musique s'arrêtent
+jusqu'au retour au premier plan (le décompte se recale alors tout seul grâce au
+timing par horloge). **L'ambiance sonore générative est donc volontairement une
+fonction de premier plan.**
 
-**Ce qui est fait (meilleur effort) :**
+Recommandation pratique : pour une séance importante, active « Garder l'écran
+allumé » et garde l'app au premier plan. Le déverrouillage audio iOS se fait au
+premier appui sur **Démarrer** (le contexte audio est repris), ce qui maximise
+les chances que les annonces passent.
 
-- **Timing basé sur l'horloge** : chaque segment a une heure de fin absolue ;
-  le temps restant est recalculé à partir de `Date.now()` à chaque image, donc
-  le décompte se corrige après tout ralentissement en arrière-plan.
-- **Audio quasi silencieux en boucle** pendant une course, pour réduire la
-  probabilité que l'onglet soit suspendu et pour ancrer une session média.
-- **MediaSession API** : titre = segment en cours, et les boutons
-  lecture / pause / piste suivante du système sont reliés aux contrôles de
-  l'app.
-- **Wake Lock** (« Garder l'écran allumé »), ré-acquis au retour sur la page
-  (`visibilitychange`) — la solution fiable pour garder une course active
-  écran allumé, courant pour les apps de course.
-
-**Limites réelles :**
-
-- **Fiable au premier plan, écran allumé.** Dès que l'écran s'éteint ou que
-  l'app passe en arrière-plan, le maintien du minuteur et le déclenchement des
-  annonces dépendent du système et ne sont **pas garantis**.
-- **iOS / Safari** suspend agressivement les onglets en arrière-plan et tend à
-  **mettre en pause** la musique d'autres apps quand la synthèse vocale parle
-  (plutôt que de la baisser).
-- **Android / Chrome** tolère mieux l'arrière-plan et tend plutôt à **baisser
-  (duck)** la musique pendant l'annonce.
-- **Une page web ne peut pas régler directement le volume d'une autre app.**
-  Le choix « baisser » vs « mettre en pause » de la musique de fond est décidé
-  par le modèle de *focus audio* du système quand notre audio / voix se
-  déclenche — pas par l'app. Il n'existe pas d'API web fiable pour le forcer.
-- **Chrome sur macOS peut « bloquer » sa synthèse vocale** : `speak()` met les
-  annonces en file mais ne les démarre jamais (aucun son, `onstart` ne se
-  déclenche pas). Ce n'est pas un bug de l'app — Safari et Android fonctionnent.
-  Remède : `chrome://restart`, quitter complètement Chrome (⌘Q), ou redémarrer
-  le Mac. En attendant, les **bips** (réglages) et la **vibration** servent de
-  repères. Une voix française locale est choisie automatiquement quand elle
-  existe (sinon l'accent peut être anglais).
-
-**Recommandation pratique :** pour une séance importante, active
-« Garder l'écran allumé » et garde l'app au premier plan. Le déverrouillage
-audio iOS se fait au premier appui sur **Démarrer** (un contexte audio est
-repris et une annonce d'amorçage muette est jouée), ce qui maximise les chances
-que les annonces suivantes passent.
+> **Chrome sur macOS** peut « bloquer » sa synthèse vocale : `speak()` met les
+> annonces en file mais ne les démarre jamais (aucun son, `onstart` muet). Ce
+> n'est pas un bug de l'app — Safari et Android fonctionnent. Remède :
+> `chrome://restart` ou quitter complètement Chrome (⌘Q). En attendant, les bips
+> et la vibration servent de repères.
 
 ---
 
@@ -127,8 +109,8 @@ que les annonces suivantes passent.
 
 ```
 index.html            structure (écran composeur + écran course, modales)
-styles.css            thème Les Roses (variables CSS), mise en page mobile-first
-app.js                logique (données, composeur, minuteur, voix, arrière-plan)
+styles.css            palette Juicy sunset + Fredoka (variables CSS), mobile-first
+app.js                logique (données, composeur, minuteur, voix, audio génératif)
 manifest.webmanifest  manifeste PWA (start_url/scope = "./")
 sw.js                 service worker (cache de la coquille, versionné)
 icons/icon-192.png    icône PWA
@@ -140,12 +122,27 @@ README.md             ce fichier
 
 Tout est persisté localement sous la clé `allure.state.v1` :
 
-- `categories` : `[{ id, label, color }]`
+- `categories` : `[{ id, label, color, song }]` — `song` = identifiant du morceau
+  (`lever` | `asphalte` | `neon` | `recup` | `none`).
 - `sequence` : `[{ categoryId, durationSeconds }]`
 - `presets` : `[{ id, name, segments }]`
-- `settings` : `{ loop, keepScreenAwake, beeps, voiceURI }`
+- `settings` : `{ loop, keepScreenAwake, beeps, voiceURI, soundscape,
+  cadenceBpm, songBpm }`
+  - `soundscape` : `none` | `music` | `cadence` | `both`
+  - `cadenceBpm` : cadence du métronome (100–180 pas/min)
+  - `songBpm` : tempo par morceau, ex. `{ lever: 124, asphalte: 144, … }` (80–180)
 
-L'état est validé au chargement et réparé / migré s'il est vide ou corrompu.
+L'état est validé au chargement et réparé / migré s'il est vide, corrompu ou
+issu d'une version antérieure (les champs manquants reçoivent des valeurs par
+défaut).
+
+## Musique générative
+
+Les morceaux sont définis dans la constante `SONGS` en haut de
+[`app.js`](app.js) : chacun est une **progression d'accords + un arrangement**
+(motif de stabs, basse, arpège, percussions, forme d'onde, BPM par défaut). Le
+moteur les synthétise en direct via l'horloge Web Audio. Pour ajuster ou ajouter
+un morceau, édite cette liste.
 
 ## Renommer l'app
 
@@ -157,5 +154,5 @@ Le nom « Allure » apparaît dans `app.js` (constante `APP_NAME`, en haut), dan
 
 - Code volontairement lisible et commenté.
 - Palette et polices dans les variables CSS de `:root` ([`styles.css`](styles.css)).
-- `prefers-reduced-motion` est respecté ; fort contraste pour la lecture en
-  plein jour.
+- `prefers-reduced-motion` est respecté (animations et pétales désactivés) ;
+  fort contraste pour la lecture en plein jour.
