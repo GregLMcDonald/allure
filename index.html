@@ -61,16 +61,11 @@
         <h2 id="lbl-sequence" class="block-title">Séquence</h2>
         <span id="total-duration" class="total-pill" aria-live="polite">0:00</span>
       </div>
-      <ol id="sequence-list" class="seq-list" aria-label="Segments de la séquence"></ol>
-      <p id="sequence-empty" class="empty-note">Aucun segment pour l'instant. Ajoute-en un ci-dessus.</p>
+      <p class="hint">Touche un bloc pour l'activer (les segments s'y ajoutent), nomme-le, et règle ses répétitions.</p>
+      <div id="blocks-list" class="blocks-list" aria-label="Blocs de la séquence"></div>
+      <p id="sequence-empty" class="empty-note">Aucun segment pour l'instant. Touche une catégorie ci-dessus.</p>
 
-      <label class="toggle-row">
-        <span class="toggle-label">Boucle</span>
-        <span class="switch">
-          <input id="toggle-loop" type="checkbox" />
-          <span class="switch-track" aria-hidden="true"></span>
-        </span>
-      </label>
+      <button id="btn-add-block" class="btn btn-soft btn-add-block" type="button">+ Ajouter un bloc</button>
     </section>
 
     <!-- Presets -->
@@ -208,18 +203,7 @@
           <option value="cadence">Cadence (métronome)</option>
           <option value="both">Musique + cadence</option>
         </select>
-        <div id="song-bpm-field" hidden>
-          <p class="set-label" style="margin-bottom: 4px;">Tempo par morceau (BPM)</p>
-          <div id="song-bpm-list"></div>
-          <p class="hint">Un morceau par catégorie se règle dans « Catégories ».</p>
-        </div>
-        <div id="cadence-field" hidden>
-          <label for="range-cadence" class="set-label">
-            Cadence : <span id="cadence-bpm-label">160</span> pas/min
-          </label>
-          <input id="range-cadence" class="range" type="range" min="100" max="180" step="1" value="160" />
-        </div>
-        <p class="hint">Sons synthétisés dans l'app, joués pendant la course (au premier plan).</p>
+        <p class="hint">Le morceau et le tempo se règlent par catégorie dans « Catégories » (le même tempo cale la musique et le métronome). Sons synthétisés dans l'app, joués au premier plan.</p>
         <button id="btn-preview-soundscape" class="btn btn-soft" type="button">Écouter un aperçu</button>
       </div>
 

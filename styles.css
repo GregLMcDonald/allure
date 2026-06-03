@@ -284,6 +284,101 @@ body {
 .mini-btn:disabled { opacity: 0.35; cursor: default; }
 .mini-btn.danger { color: #b13a3a; }
 
+/* Blocks (subsequences) --------------------------------------------------- */
+.blocks-list { display: flex; flex-direction: column; gap: 12px; }
+.blk-card {
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 10px 10px 4px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+/* The block currently being edited — ringed so it's clear where chips land. */
+.blk-card.is-active {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 16%, transparent);
+}
+.blk-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.blk-name {
+  flex: 1;
+  min-width: 80px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  border-bottom: 1.5px dashed transparent;
+  padding: 2px 2px 3px;
+  border-radius: 4px;
+}
+.blk-name::placeholder { color: var(--muted); opacity: 0.8; }
+.blk-name:hover { border-bottom-color: color-mix(in srgb, var(--primary) 30%, transparent); }
+.blk-name:focus {
+  outline: none;
+  border-bottom-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+}
+.blk-total {
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  font-size: 0.82rem;
+  color: var(--primary-deep);
+  background: var(--blush);
+  padding: 3px 9px;
+  border-radius: 999px;
+}
+.blk-ctrls { display: flex; gap: 4px; flex-shrink: 0; }
+.blk-empty { margin: 2px 2px 10px; }
+/* Segment rows sit on the card's bg, so lift them to the surface tone. */
+.blk-card .seq-item { background: var(--surface); }
+
+/* ×N / ∞ repeat stepper */
+.blk-rep {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 2px;
+  box-shadow: var(--shadow-sm);
+}
+.blk-rep .mini-btn {
+  width: 30px; height: 30px;
+  box-shadow: none;
+  background: transparent;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+.blk-rep-val {
+  min-width: 40px;
+  border: none;
+  background: transparent;
+  font-family: var(--font-body);
+  font-weight: 800;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--primary-deep);
+  cursor: pointer;
+  padding: 4px 4px;
+  border-radius: 8px;
+  text-align: center;
+}
+.blk-rep-val:hover { background: var(--blush); }
+.blk-rep-val:active { transform: scale(0.92); }
+
+.btn-add-block {
+  width: 100%;
+  margin-top: 12px;
+}
+
 /* Toggle switch ----------------------------------------------------------- */
 .toggle-row {
   display: flex;
@@ -544,24 +639,7 @@ body {
   height: 28px;
   cursor: pointer;
 }
-#cadence-field { margin-top: 4px; }
-
-/* Per-song tempo rows in Settings */
-.song-bpm-row { margin-bottom: 6px; }
-.song-bpm-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  font-weight: 700;
-  font-size: 0.92rem;
-}
-.song-bpm-val {
-  color: var(--primary-deep);
-  font-variant-numeric: tabular-nums;
-  font-weight: 800;
-}
-
-/* Song picker in the category manager (wraps to its own line under the row) */
+/* Song picker + tempo in the category manager (wrap to their own lines) */
 .cat-row { flex-wrap: wrap; }
 .cat-song {
   flex-basis: 100%;
@@ -575,6 +653,21 @@ body {
   color: var(--ink);
   cursor: pointer;
 }
+/* Per-category tempo slider (drives song + metronome together) */
+.cat-tempo { flex-basis: 100%; }
+.cat-tempo-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-weight: 700;
+  font-size: 0.92rem;
+}
+.cat-tempo-val {
+  color: var(--primary-deep);
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+.cat-tempo .range { margin: 4px 0 2px; }
 
 .fine-print {
   color: var(--muted);

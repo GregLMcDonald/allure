@@ -84,10 +84,46 @@ const SONGS = [
 ];
 const SONG_IDS = SONGS.map((s) => s.id);
 function getSong(id) { return SONGS.find((s) => s.id === id) || null; }
-function songBpmDefaults() {
-  const m = {};
-  SONGS.forEach((s) => { m[s.id] = s.defBpm; });
-  return m;
+
+// Tempo (BPM) is a single per-category value that governs BOTH that category's
+// song playback AND its metronome cadence, so they stay in sync. One unified
+// range covers slow walking music up to a brisk running cadence.
+const TEMPO_MIN = 80;
+const TEMPO_MAX = 200;
+function clampTempo(b) {
+  const n = Math.round(Number(b));
+  if (!Number.isFinite(n)) return 160;
+  return Math.min(TEMPO_MAX, Math.max(TEMPO_MIN, n));
+}
+// A sensible starting tempo for a category: its song's natural BPM, or a
+// typical running cadence when there's no song.
+function defaultTempoForSong(songId) {
+  const s = getSong(songId);
+  return clampTempo(s ? s.defBpm : 160);
+}
+
+// Clamp a block repeat count. 0 is the ∞ (loop-forever) sentinel; otherwise
+// an integer in 1..99. Anything bogus falls back to 1 (plays once).
+function clampRepeat(n) {
+  if (n === 0) return 0; // ∞ sentinel
+  const v = Math.round(Number(n));
+  if (!Number.isFinite(v) || v < 1) return 1;
+  return Math.min(99, v);
+}
+
+function makeBlock(segments, repeat, name) {
+  return {
+    id: uid("blk"),
+    name: typeof name === "string" ? name : "",
+    repeat: clampRepeat(repeat),
+    segments: segments || [],
+  };
+}
+
+// Trim a block name; fall back to "Bloc N" (1-based index) when unnamed.
+function blockDisplayName(block, index) {
+  const n = (block.name || "").trim();
+  return n || `Bloc ${index + 1}`;
 }
 
 // A unique id generator that doesn't rely on crypto (broad support).
@@ -104,21 +140,26 @@ function uid(prefix) {
 // Default seeded state when nothing is stored yet.
 function defaultState() {
   return {
+    // Each category carries its own song + tempo. The tempo drives both the
+    // song and the metronome for that category (see clampTempo above).
     categories: [
-      { id: "cat_marche", label: "marche", color: "#4ECBA5", song: "recup" },    // fresh mint
-      { id: "cat_v1", label: "v1", color: "#FF8A3D", song: "lever" },            // tangerine
-      { id: "cat_v2", label: "v2", color: "#B5184C", song: "asphalte" },         // punchy wine
+      { id: "cat_marche", label: "marche", color: "#4ECBA5", song: "recup", tempo: 92 },     // fresh mint
+      { id: "cat_v1", label: "v1", color: "#FF8A3D", song: "lever", tempo: 124 },            // tangerine
+      { id: "cat_v2", label: "v2", color: "#B5184C", song: "asphalte", tempo: 144 },         // punchy wine
     ],
-    sequence: [], // [{ categoryId, durationSeconds }]
-    presets: [],  // [{ id, name, segments }]
+    // A workout is an ordered list of blocks. Each block is a little
+    // subsequence of segments with its own repeat count:
+    //   repeat = 1   → plays once
+    //   repeat = N   → plays N times in a row
+    //   repeat = 0   → ∞, loops forever (replaces the old global "Boucle")
+    blocks: [], // [{ id, name, repeat, segments: [{ categoryId, durationSeconds }] }]
+    activeBlockId: null, // which block new segments get added to (builder)
+    presets: [],  // [{ id, name, blocks }]
     settings: {
-      loop: false,
       keepScreenAwake: false,
       beeps: false,
       voiceURI: null,
-      soundscape: "none", // none | music | cadence | both
-      cadenceBpm: 160,     // metronome cadence (steps/min), 100–180
-      songBpm: songBpmDefaults(), // per-song music tempo, 80–180
+      soundscape: "none", // none | music | cadence | both (tempo is per-category)
     },
   };
 }
@@ -156,12 +197,17 @@ function validateState(input) {
   if (Array.isArray(input.categories) && input.categories.length > 0) {
     const cats = input.categories
       .filter((c) => c && typeof c === "object")
-      .map((c) => ({
-        id: typeof c.id === "string" ? c.id : uid("cat"),
-        label: typeof c.label === "string" && c.label.trim() ? c.label : "catégorie",
-        color: typeof c.color === "string" ? c.color : "#FF7A9A",
-        song: SONG_IDS.includes(c.song) || c.song === "none" ? c.song : SONG_IDS[0],
-      }));
+      .map((c) => {
+        const song = SONG_IDS.includes(c.song) || c.song === "none" ? c.song : SONG_IDS[0];
+        return {
+          id: typeof c.id === "string" ? c.id : uid("cat"),
+          label: typeof c.label === "string" && c.label.trim() ? c.label : "catégorie",
+          color: typeof c.color === "string" ? c.color : "#FF7A9A",
+          song,
+          // Migrate: keep an existing tempo, else seed from the song's BPM.
+          tempo: c.tempo != null ? clampTempo(c.tempo) : defaultTempoForSong(song),
+        };
+      });
     if (cats.length) out.categories = cats;
   }
 
@@ -177,23 +223,58 @@ function validateState(input) {
           }))
       : [];
 
-  out.sequence = cleanSegments(input.sequence);
+  const cleanBlocks = (blocks) =>
+    Array.isArray(blocks)
+      ? blocks
+          .filter((b) => b && typeof b === "object")
+          .map((b) => ({
+            id: typeof b.id === "string" ? b.id : uid("blk"),
+            name: typeof b.name === "string" ? b.name : "",
+            repeat: clampRepeat(b.repeat),
+            segments: cleanSegments(b.segments),
+          }))
+      : [];
 
-  // Presets
+  // Convert legacy flat `sequence` (+ old global loop flag) into one block, so
+  // existing saved state keeps working — and an old "loop on" becomes a single
+  // ∞ block, matching the previous behaviour.
+  const segmentsToBlocks = (segs, legacyLoop) => {
+    const clean = cleanSegments(segs);
+    return clean.length ? [makeBlock(clean, legacyLoop ? 0 : 1)] : [];
+  };
+
+  if (Array.isArray(input.blocks)) {
+    out.blocks = cleanBlocks(input.blocks);
+  } else {
+    const legacyLoop = !!(input.settings && input.settings.loop);
+    out.blocks = segmentsToBlocks(input.sequence, legacyLoop);
+  }
+
+  // Active block (builder target): keep it only if it still exists, else point
+  // at the first block (or null when there are none).
+  out.activeBlockId =
+    out.blocks.some((b) => b.id === input.activeBlockId)
+      ? input.activeBlockId
+      : out.blocks.length
+      ? out.blocks[0].id
+      : null;
+
+  // Presets (with the same legacy migration for older preset shapes).
   if (Array.isArray(input.presets)) {
     out.presets = input.presets
       .filter((p) => p && typeof p === "object")
       .map((p) => ({
         id: typeof p.id === "string" ? p.id : uid("preset"),
         name: typeof p.name === "string" && p.name.trim() ? p.name : "Sans nom",
-        segments: cleanSegments(p.segments),
+        blocks: Array.isArray(p.blocks)
+          ? cleanBlocks(p.blocks)
+          : segmentsToBlocks(p.segments, false),
       }));
   }
 
   // Settings
   if (input.settings && typeof input.settings === "object") {
     out.settings = {
-      loop: !!input.settings.loop,
       keepScreenAwake: !!input.settings.keepScreenAwake,
       beeps: !!input.settings.beeps,
       voiceURI:
@@ -203,15 +284,6 @@ function validateState(input) {
       soundscape: ["none", "music", "cadence", "both"].includes(input.settings.soundscape)
         ? input.settings.soundscape
         : "none",
-      cadenceBpm: clampBpm(input.settings.cadenceBpm),
-      songBpm: (() => {
-        const src = input.settings.songBpm || {};
-        const m = {};
-        SONGS.forEach((s) => {
-          m[s.id] = clampSongBpm(src[s.id] != null ? src[s.id] : s.defBpm);
-        });
-        return m;
-      })(),
     };
   }
 
@@ -290,6 +362,33 @@ function totalSequenceSeconds(segments) {
   return segments.reduce((sum, s) => sum + s.durationSeconds, 0);
 }
 
+// A block's effective iteration count (Infinity for the ∞ sentinel).
+function blockRepeatVal(b) {
+  return b.repeat === 0 ? Infinity : b.repeat;
+}
+// Total play time of one block (all its repeats). Infinity if it loops forever.
+function blockTotalSeconds(b) {
+  return totalSequenceSeconds(b.segments) * blockRepeatVal(b);
+}
+// Total play time of a whole workout. Infinity if any block loops forever.
+function blocksTotalSeconds(blocks) {
+  let total = 0;
+  for (const b of blocks) {
+    const t = blockTotalSeconds(b);
+    if (t === Infinity) return Infinity;
+    total += t;
+  }
+  return total;
+}
+// How many segments are placed across all blocks (ignoring repeats).
+function blocksSegmentCount(blocks) {
+  return blocks.reduce((n, b) => n + b.segments.length, 0);
+}
+// Format a duration that might be infinite.
+function formatTotal(sec) {
+  return sec === Infinity ? "∞" : formatTime(sec);
+}
+
 /* ----------------------------------------------------------------------- */
 /* 4. DOM references                                                        */
 /* ----------------------------------------------------------------------- */
@@ -302,10 +401,10 @@ const els = {
   screenRun: $("screen-run"),
   // builder
   categoryChips: $("category-chips"),
-  sequenceList: $("sequence-list"),
+  blocksList: $("blocks-list"),
   sequenceEmpty: $("sequence-empty"),
   totalDuration: $("total-duration"),
-  toggleLoop: $("toggle-loop"),
+  btnAddBlock: $("btn-add-block"),
   btnStart: $("btn-start"),
   btnManageCategories: $("btn-manage-categories"),
   btnOpenSettings: $("btn-open-settings"),
@@ -335,11 +434,6 @@ const els = {
   toggleWakelock: $("toggle-wakelock"),
   toggleBeeps: $("toggle-beeps"),
   selectSoundscape: $("select-soundscape"),
-  songBpmField: $("song-bpm-field"),
-  songBpmList: $("song-bpm-list"),
-  cadenceField: $("cadence-field"),
-  rangeCadence: $("range-cadence"),
-  cadenceBpmLabel: $("cadence-bpm-label"),
   btnPreviewSoundscape: $("btn-preview-soundscape"),
   // run screen
   ringProgress: $("ring-progress"),
@@ -378,6 +472,23 @@ function renderChips() {
   });
 }
 
+// The block new segments get added to: the active one, creating a first block
+// on demand so tapping a category still "just works" on a fresh workout.
+function targetBlock() {
+  if (!state.blocks.length) {
+    const b = makeBlock([], 1);
+    state.blocks.push(b);
+    state.activeBlockId = b.id;
+    return b;
+  }
+  let b = state.blocks.find((x) => x.id === state.activeBlockId);
+  if (!b) {
+    b = state.blocks[state.blocks.length - 1];
+    state.activeBlockId = b.id;
+  }
+  return b;
+}
+
 // Pick a duration (in-app sheet, no native prompt) and add a segment.
 function addSegment(categoryId) {
   const cat = getCategory(categoryId);
@@ -387,9 +498,10 @@ function addSegment(categoryId) {
     initialSeconds: 60,
     confirmLabel: "Ajouter",
     onConfirm: (seconds) => {
-      state.sequence.push({ categoryId, durationSeconds: seconds });
+      const block = targetBlock();
+      block.segments.push({ categoryId, durationSeconds: seconds });
       saveState();
-      renderSequence(state.sequence.length - 1);
+      renderBlocks({ blockId: block.id, segIndex: block.segments.length - 1 });
     },
   });
 }
@@ -457,69 +569,199 @@ function confirmDuration() {
   if (cb) cb(seconds);
 }
 
-function renderSequence(highlightIndex) {
-  const list = els.sequenceList;
-  list.innerHTML = "";
+// Render the whole workout as a stack of block cards.
+// `highlight` (optional): { blockId, segIndex } to pop-in a just-added segment.
+function renderBlocks(highlight) {
+  const wrap = els.blocksList;
+  wrap.innerHTML = "";
 
-  const isEmpty = state.sequence.length === 0;
-  els.sequenceEmpty.hidden = !isEmpty;
-  els.btnStart.disabled = isEmpty;
-  els.btnSavePreset.disabled = isEmpty;
+  // Keep the active-block pointer valid (first block by default, null if none).
+  if (state.blocks.length && !state.blocks.some((b) => b.id === state.activeBlockId)) {
+    state.activeBlockId = state.blocks[0].id;
+  } else if (!state.blocks.length) {
+    state.activeBlockId = null;
+  }
 
-  state.sequence.forEach((seg, index) => {
-    const cat = getCategory(seg.categoryId);
-    const li = document.createElement("li");
-    li.className = "seq-item";
-    if (index === highlightIndex) li.classList.add("just-added");
+  const noSegments = blocksSegmentCount(state.blocks) === 0;
+  // The page-level empty note only shows when there are literally no blocks.
+  els.sequenceEmpty.hidden = state.blocks.length > 0;
+  els.btnStart.disabled = noSegments;
+  els.btnSavePreset.disabled = noSegments;
 
-    const color = document.createElement("span");
-    color.className = "seq-color";
-    color.style.backgroundColor = cat ? cat.color : "var(--muted)";
-
-    const main = document.createElement("div");
-    main.className = "seq-main";
-    const label = document.createElement("div");
-    label.className = "seq-label";
-    label.textContent = cat ? cat.label : "(supprimée)";
-    main.appendChild(label);
-
-    // Tappable duration — opens the in-app picker.
-    const dur = document.createElement("button");
-    dur.type = "button";
-    dur.className = "seq-dur";
-    dur.textContent = formatTime(seg.durationSeconds);
-    dur.setAttribute("aria-label", `Durée du segment : ${formatTime(seg.durationSeconds)}. Toucher pour modifier.`);
-    dur.addEventListener("click", () => {
-      openDurationPicker({
-        title: `Durée — ${cat ? cat.label : "segment"}`,
-        initialSeconds: seg.durationSeconds,
-        confirmLabel: "OK",
-        onConfirm: (seconds) => {
-          seg.durationSeconds = seconds;
-          saveState();
-          renderSequence();
-        },
-      });
-    });
-
-    const btns = document.createElement("div");
-    btns.className = "seq-btns";
-    btns.appendChild(miniBtn("▲", "Monter", index === 0, () => moveSegment(index, -1)));
-    btns.appendChild(
-      miniBtn("▼", "Descendre", index === state.sequence.length - 1, () =>
-        moveSegment(index, 1)
-      )
-    );
-    btns.appendChild(miniBtn("✕", "Supprimer", false, () => deleteSegment(index), true));
-
-    li.appendChild(color);
-    li.appendChild(main);
-    li.appendChild(dur);
-    li.appendChild(btns);
-    list.appendChild(li);
+  state.blocks.forEach((block, bi) => {
+    wrap.appendChild(renderBlockCard(block, bi, highlight));
   });
 
-  els.totalDuration.textContent = formatTime(totalSequenceSeconds(state.sequence));
+  els.totalDuration.textContent = formatTotal(blocksTotalSeconds(state.blocks));
+}
+
+// Mark a block as the active edit target. Toggles the highlight in place rather
+// than re-rendering, so a focused name field doesn't lose focus.
+function setActiveBlock(id) {
+  if (!id || state.activeBlockId === id) return;
+  state.activeBlockId = id;
+  saveState();
+  els.blocksList.querySelectorAll(".blk-card").forEach((card) => {
+    card.classList.toggle("is-active", card.dataset.blockId === id);
+  });
+}
+
+function renderBlockCard(block, bi, highlight) {
+  const card = document.createElement("div");
+  card.className = "blk-card";
+  card.dataset.blockId = block.id;
+  if (block.id === state.activeBlockId) card.classList.add("is-active");
+  // Tapping anywhere on the card (but not on a control) selects it as active.
+  card.addEventListener("click", (e) => {
+    if (e.target.closest("button, input, select")) return;
+    setActiveBlock(block.id);
+  });
+
+  // ---- Header: name · repeat control · subtotal · move/delete ----
+  const head = document.createElement("div");
+  head.className = "blk-head";
+
+  // Editable block name (placeholder shows the default "Bloc N").
+  const title = document.createElement("input");
+  title.type = "text";
+  title.className = "blk-name";
+  title.value = block.name || "";
+  title.placeholder = `Bloc ${bi + 1}`;
+  title.maxLength = 30;
+  title.setAttribute("aria-label", `Nom du ${blockDisplayName(block, bi)}`);
+  title.addEventListener("focus", () => setActiveBlock(block.id));
+  title.addEventListener("input", () => {
+    block.name = title.value;
+    saveState(); // no re-render: keep the field focused while typing
+  });
+
+  const total = document.createElement("span");
+  total.className = "blk-total";
+  total.textContent = formatTotal(blockTotalSeconds(block));
+  total.setAttribute("aria-label", `Durée du bloc : ${formatTotal(blockTotalSeconds(block))}`);
+
+  const ctrls = document.createElement("div");
+  ctrls.className = "blk-ctrls";
+  ctrls.appendChild(miniBtn("▲", "Monter le bloc", bi === 0, () => moveBlock(bi, -1)));
+  ctrls.appendChild(
+    miniBtn("▼", "Descendre le bloc", bi === state.blocks.length - 1, () => moveBlock(bi, 1))
+  );
+  ctrls.appendChild(miniBtn("✕", "Supprimer le bloc", false, () => deleteBlock(bi), true));
+
+  head.appendChild(title);
+  head.appendChild(buildRepeatControl(block));
+  head.appendChild(total);
+  head.appendChild(ctrls);
+  card.appendChild(head);
+
+  // ---- Segment list ----
+  if (block.segments.length === 0) {
+    const note = document.createElement("p");
+    note.className = "empty-note blk-empty";
+    note.textContent = "Bloc vide. Touche une catégorie pour y ajouter un segment.";
+    card.appendChild(note);
+  } else {
+    const list = document.createElement("ol");
+    list.className = "seq-list";
+    block.segments.forEach((seg, si) => {
+      list.appendChild(renderSegItem(block, bi, seg, si, highlight));
+    });
+    card.appendChild(list);
+  }
+
+  return card;
+}
+
+// The compact ×N / ∞ repeat stepper that sits in each block header.
+function buildRepeatControl(block) {
+  const wrap = document.createElement("div");
+  wrap.className = "blk-rep";
+
+  const isInf = block.repeat === 0;
+
+  const minus = miniBtn("−", "Moins de répétitions", false, () =>
+    setRepeat(block, isInf ? 1 : Math.max(1, block.repeat - 1))
+  );
+  const plus = miniBtn("+", "Plus de répétitions", false, () =>
+    setRepeat(block, isInf ? 0 : block.repeat + 1)
+  );
+
+  const val = document.createElement("button");
+  val.type = "button";
+  val.className = "blk-rep-val";
+  val.textContent = isInf ? "∞" : block.repeat + "×";
+  val.title = isInf ? "Boucle infinie — toucher pour repasser à 1×" : "Toucher pour une boucle infinie";
+  val.setAttribute(
+    "aria-label",
+    isInf
+      ? "Répétitions : infini. Toucher pour repasser à une fois."
+      : `Répétitions : ${block.repeat}. Toucher pour une boucle infinie.`
+  );
+  val.addEventListener("click", () => setRepeat(block, isInf ? 1 : 0));
+
+  wrap.appendChild(minus);
+  wrap.appendChild(val);
+  wrap.appendChild(plus);
+  return wrap;
+}
+
+function setRepeat(block, n) {
+  block.repeat = clampRepeat(n);
+  saveState();
+  renderBlocks();
+}
+
+function renderSegItem(block, bi, seg, si, highlight) {
+  const cat = getCategory(seg.categoryId);
+  const li = document.createElement("li");
+  li.className = "seq-item";
+  if (highlight && highlight.blockId === block.id && highlight.segIndex === si) {
+    li.classList.add("just-added");
+  }
+
+  const color = document.createElement("span");
+  color.className = "seq-color";
+  color.style.backgroundColor = cat ? cat.color : "var(--muted)";
+
+  const main = document.createElement("div");
+  main.className = "seq-main";
+  const label = document.createElement("div");
+  label.className = "seq-label";
+  label.textContent = cat ? cat.label : "(supprimée)";
+  main.appendChild(label);
+
+  // Tappable duration — opens the in-app picker.
+  const dur = document.createElement("button");
+  dur.type = "button";
+  dur.className = "seq-dur";
+  dur.textContent = formatTime(seg.durationSeconds);
+  dur.setAttribute("aria-label", `Durée du segment : ${formatTime(seg.durationSeconds)}. Toucher pour modifier.`);
+  dur.addEventListener("click", () => {
+    openDurationPicker({
+      title: `Durée — ${cat ? cat.label : "segment"}`,
+      initialSeconds: seg.durationSeconds,
+      confirmLabel: "OK",
+      onConfirm: (seconds) => {
+        seg.durationSeconds = seconds;
+        saveState();
+        renderBlocks();
+      },
+    });
+  });
+
+  const btns = document.createElement("div");
+  btns.className = "seq-btns";
+  btns.appendChild(miniBtn("▲", "Monter", si === 0, () => moveSegment(bi, si, -1)));
+  btns.appendChild(
+    miniBtn("▼", "Descendre", si === block.segments.length - 1, () => moveSegment(bi, si, 1))
+  );
+  btns.appendChild(miniBtn("✕", "Supprimer", false, () => deleteSegment(bi, si), true));
+
+  li.appendChild(color);
+  li.appendChild(main);
+  li.appendChild(dur);
+  li.appendChild(btns);
+  return li;
 }
 
 function miniBtn(glyph, label, disabled, onClick, danger) {
@@ -533,19 +775,58 @@ function miniBtn(glyph, label, disabled, onClick, danger) {
   return b;
 }
 
-function moveSegment(index, delta) {
-  const j = index + delta;
-  if (j < 0 || j >= state.sequence.length) return;
-  const arr = state.sequence;
-  [arr[index], arr[j]] = [arr[j], arr[index]];
+/* ---- Block & segment mutations ---- */
+
+function addBlock() {
+  const b = makeBlock([], 1);
+  state.blocks.push(b);
+  state.activeBlockId = b.id; // a new block becomes the edit target
   saveState();
-  renderSequence();
+  renderBlocks();
 }
 
-function deleteSegment(index) {
-  state.sequence.splice(index, 1);
+function moveBlock(bi, delta) {
+  const j = bi + delta;
+  if (j < 0 || j >= state.blocks.length) return;
+  const arr = state.blocks;
+  [arr[bi], arr[j]] = [arr[j], arr[bi]];
   saveState();
-  renderSequence();
+  renderBlocks();
+}
+
+function deleteBlock(bi) {
+  const block = state.blocks[bi];
+  if (!block) return;
+  // Only nag about confirmation when there's content to lose.
+  if (block.segments.length && !window.confirm(`Supprimer « ${blockDisplayName(block, bi)} » ?`)) return;
+  const wasActive = block.id === state.activeBlockId;
+  state.blocks.splice(bi, 1);
+  // If we removed the active block, fall back to its neighbour.
+  if (wasActive) {
+    const next = state.blocks[bi] || state.blocks[bi - 1] || null;
+    state.activeBlockId = next ? next.id : null;
+  }
+  saveState();
+  renderBlocks();
+}
+
+function moveSegment(bi, si, delta) {
+  const block = state.blocks[bi];
+  if (!block) return;
+  const j = si + delta;
+  if (j < 0 || j >= block.segments.length) return;
+  const arr = block.segments;
+  [arr[si], arr[j]] = [arr[j], arr[si]];
+  saveState();
+  renderBlocks();
+}
+
+function deleteSegment(bi, si) {
+  const block = state.blocks[bi];
+  if (!block) return;
+  block.segments.splice(si, 1);
+  saveState();
+  renderBlocks();
 }
 
 /* ---- Presets ---- */
@@ -566,7 +847,7 @@ function renderPresets() {
     const meta = document.createElement("span");
     meta.className = "preset-meta";
     meta.textContent =
-      preset.segments.length + " · " + formatTime(totalSequenceSeconds(preset.segments));
+      blocksSegmentCount(preset.blocks) + " · " + formatTotal(blocksTotalSeconds(preset.blocks));
 
     const loadBtn = miniBtn("↺", "Charger", false, () => loadPreset(preset.id));
     const delBtn = miniBtn("✕", "Supprimer", false, () => deletePreset(preset.id), true);
@@ -579,16 +860,25 @@ function renderPresets() {
   });
 }
 
+// Deep-copy blocks so later builder edits never mutate a saved/loaded copy.
+function cloneBlocks(blocks) {
+  return blocks.map((b) => ({
+    id: uid("blk"),
+    name: b.name || "",
+    repeat: b.repeat,
+    segments: b.segments.map((s) => ({ ...s })),
+  }));
+}
+
 function saveCurrentAsPreset() {
-  if (state.sequence.length === 0) return;
+  if (blocksSegmentCount(state.blocks) === 0) return;
   const name = window.prompt("Nom de la séquence", "Ma séquence");
   if (name === null) return;
   const clean = name.trim() || "Sans nom";
   state.presets.push({
     id: uid("preset"),
     name: clean,
-    // Deep copy so later edits to the builder don't mutate the preset.
-    segments: state.sequence.map((s) => ({ ...s })),
+    blocks: cloneBlocks(state.blocks),
   });
   saveState();
   renderPresets();
@@ -598,9 +888,10 @@ function saveCurrentAsPreset() {
 function loadPreset(id) {
   const preset = state.presets.find((p) => p.id === id);
   if (!preset) return;
-  state.sequence = preset.segments.map((s) => ({ ...s }));
+  state.blocks = cloneBlocks(preset.blocks);
+  state.activeBlockId = state.blocks.length ? state.blocks[0].id : null;
   saveState();
-  renderSequence();
+  renderBlocks();
   showToast("« " + preset.name + " » chargée");
 }
 
@@ -618,10 +909,10 @@ function deletePreset(id) {
 function exportSequences() {
   const payload = {
     app: APP_NAME,
-    version: 1,
+    version: 2,
     categories: state.categories,
     presets: state.presets,
-    sequence: state.sequence,
+    blocks: state.blocks,
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], {
     type: "application/json",
@@ -655,10 +946,17 @@ function importSequencesFromFile(file) {
         });
       }
       // Re-validate everything (drops segments with unknown categories).
+      // Accept both the new `blocks` shape and the legacy flat `sequence`;
+      // keep the current workout if the file carries neither.
       const merged = validateState({
         categories: state.categories,
         presets: (state.presets || []).concat(data.presets || []),
-        sequence: data.sequence || state.sequence,
+        blocks: Array.isArray(data.blocks)
+          ? data.blocks
+          : Array.isArray(data.sequence)
+          ? undefined
+          : state.blocks,
+        sequence: !Array.isArray(data.blocks) ? data.sequence : undefined,
         settings: state.settings,
       });
       state = merged;
@@ -692,7 +990,7 @@ function renderCategoryEditor() {
       cat.color = color.value;
       saveState();
       renderChips();
-      renderSequence();
+      renderBlocks();
     });
 
     const label = document.createElement("input");
@@ -705,17 +1003,19 @@ function renderCategoryEditor() {
       label.value = cat.label;
       saveState();
       renderChips();
-      renderSequence();
+      renderBlocks();
     });
 
     const del = miniBtn("✕", "Supprimer la catégorie", false, () => {
       if (!window.confirm(`Supprimer la catégorie « ${cat.label} » ?`)) return;
       state.categories = state.categories.filter((c) => c.id !== cat.id);
-      // Drop any sequence/preset segments that used it.
-      state.sequence = state.sequence.filter((s) => s.categoryId !== cat.id);
-      state.presets.forEach((p) => {
-        p.segments = p.segments.filter((s) => s.categoryId !== cat.id);
-      });
+      // Drop any block/preset segments that used it (across all blocks).
+      const dropFromBlocks = (blocks) =>
+        blocks.forEach((b) => {
+          b.segments = b.segments.filter((s) => s.categoryId !== cat.id);
+        });
+      dropFromBlocks(state.blocks);
+      state.presets.forEach((p) => dropFromBlocks(p.blocks));
       saveState();
       renderAll();
       renderCategoryEditor();
@@ -751,14 +1051,54 @@ function renderCategoryEditor() {
         }
       } else {
         // Not running — play a short sample so the user hears their pick.
-        previewSong(song.value);
+        previewCategory(cat);
       }
     });
+
+    // Tempo slider — governs BOTH this category's song and its metronome, so
+    // they're always in sync. The label reads out the current BPM.
+    const tempoWrap = document.createElement("div");
+    tempoWrap.className = "cat-tempo";
+    const tempoHead = document.createElement("div");
+    tempoHead.className = "cat-tempo-head";
+    const tempoName = document.createElement("span");
+    tempoName.textContent = "Tempo";
+    const tempoVal = document.createElement("span");
+    tempoVal.className = "cat-tempo-val";
+    tempoVal.textContent = categoryTempo(cat) + " BPM";
+    tempoHead.appendChild(tempoName);
+    tempoHead.appendChild(tempoVal);
+
+    const tempo = document.createElement("input");
+    tempo.type = "range";
+    tempo.className = "range";
+    tempo.min = String(TEMPO_MIN);
+    tempo.max = String(TEMPO_MAX);
+    tempo.step = "1";
+    tempo.value = String(categoryTempo(cat));
+    tempo.setAttribute("aria-label", "Tempo de " + cat.label + " (BPM)");
+    tempo.addEventListener("input", () => {
+      const v = clampTempo(tempo.value);
+      cat.tempo = v;
+      tempoVal.textContent = v + " BPM";
+      saveState();
+      // If this category is sounding right now, retune live (music + metronome).
+      const cur = currentSegment();
+      if (run.active && scape.running && cur && cur.categoryId === cat.id) {
+        scape.tempo = v;
+      }
+    });
+    // Audition on release (not on every drag tick) so the loop doesn't thrash.
+    tempo.addEventListener("change", () => { if (!run.active) previewCategory(cat); });
+
+    tempoWrap.appendChild(tempoHead);
+    tempoWrap.appendChild(tempo);
 
     row.appendChild(color);
     row.appendChild(label);
     row.appendChild(del);
     row.appendChild(song);
+    row.appendChild(tempoWrap);
     box.appendChild(row);
   });
 }
@@ -771,7 +1111,13 @@ function addCategory() {
   // Pick a default color from the rose ramp, rotating through it.
   const palette = ["#FF7A9A", "#FF8A3D", "#FFC15E", "#4ECBA5", "#B5184C", "#B05CFF"];
   const color = palette[state.categories.length % palette.length];
-  state.categories.push({ id: uid("cat"), label: clean, color, song: SONG_IDS[0] });
+  state.categories.push({
+    id: uid("cat"),
+    label: clean,
+    color,
+    song: SONG_IDS[0],
+    tempo: defaultTempoForSong(SONG_IDS[0]),
+  });
   saveState();
   renderChips();
   renderCategoryEditor();
@@ -912,8 +1258,11 @@ let _speechWarned = false;
 // Speak a phrase in French, cancelling anything already queued.
 // `useVoice` lets us retry without a specific voice if assigning one fails
 // (assigning `.voice` can fail silently on iOS Safari).
-function speak(text, useVoice) {
-  if (!("speechSynthesis" in window)) return;
+// `onDone` (optional) fires once the utterance finishes naturally — used to
+// chain a follow-up cue after a gap. It does NOT fire when the utterance is
+// superseded by a later speak() (interrupted/canceled).
+function speak(text, useVoice, onDone) {
+  if (!("speechSynthesis" in window)) { if (onDone) onDone(); return; }
   if (useVoice === undefined) useVoice = true;
   try {
     const synth = window.speechSynthesis;
@@ -926,6 +1275,11 @@ function speak(text, useVoice) {
     const v = useVoice ? selectedVoice() : null;
     if (v) u.voice = v;
 
+    let doneFired = false;
+    const fireDone = () => {
+      if (!doneFired && typeof onDone === "function") { doneFired = true; onDone(); }
+    };
+
     // Keep a reference (Chrome GC fix); drop it when the utterance settles.
     _utterances.push(u);
     const release = () => {
@@ -935,16 +1289,17 @@ function speak(text, useVoice) {
     };
     let started = false;
     u.onstart = () => { started = true; _speechEverStarted = true; duckSoundscape(true); };
-    u.onend = release;
+    u.onend = () => { release(); fireDone(); };
     u.onerror = (e) => {
       release();
       const err = e && e.error;
       // "interrupted"/"canceled" fire whenever we cancel() for the next
-      // segment — those are normal. A real failure with a voice set: retry
-      // once with no voice (covers the iOS-Safari ".voice fails silently" case).
-      if (useVoice && err && err !== "interrupted" && err !== "canceled") {
-        speak(text, false);
-      }
+      // segment — those are normal (and must NOT trigger onDone). A real
+      // failure with a voice set: retry once with no voice (covers the
+      // iOS-Safari ".voice fails silently" case), carrying onDone forward.
+      if (err === "interrupted" || err === "canceled") return;
+      if (useVoice && err) speak(text, false, onDone);
+      else fireDone(); // failed with no retry path — still advance the chain
     };
 
     // Chrome can leave the engine "paused", which silently drops utterances.
@@ -957,13 +1312,13 @@ function speak(text, useVoice) {
     // Watchdog: a chosen voice that never actually starts (a remote/undownloaded
     // voice can queue but stay silent in Chrome, with NO error) → retry once
     // with the browser default voice. The retry passes useVoice=false, so it
-    // neither re-arms this watchdog nor loops.
+    // neither re-arms this watchdog nor loops; onDone rides along with it.
     if (useVoice && v) {
       setTimeout(() => {
-        if (!started) speak(text, false);
+        if (!started) speak(text, false, onDone);
       }, 700);
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) { if (onDone) onDone(); }
 }
 
 // If speech never actually starts shortly after a run begins, the browser's
@@ -979,11 +1334,49 @@ function maybeWarnNoSpeech() {
   }, 2000);
 }
 
-// Announce a segment: "Marche, deux minutes".
+// Pending "speak the segment after the block-name lead" timer, so a quick
+// skip cancels a follow-up cue that no longer applies.
+let _announceTimer = null;
+const ANNOUNCE_GAP_MS = 1000; // pause between the block name and the segment
+
+function clearPendingAnnounce() {
+  if (_announceTimer) { clearTimeout(_announceTimer); _announceTimer = null; }
+}
+
+// Announce a segment: "Marche, deux minutes". On the first segment of a block
+// we lead with the block's name (or "Bloc final" for an unnamed last block),
+// THEN pause ~1s before naming the segment. The very last segment of a finite
+// workout adds "Dernier segment" to that lead.
 function announceSegment(seg) {
+  clearPendingAnnounce();
+
   const cat = getCategory(seg.categoryId);
   const label = cat ? cat.label : "segment";
-  speak(`${label}, ${spokenDuration(seg.durationSeconds)}`);
+  const phrase = `${label}, ${spokenDuration(seg.durationSeconds)}`;
+
+  const block = run.blocks[run.blockIndex];
+  const enteringBlock = run.iter === 1 && run.segIndex === 0;
+  const named = block ? (block.name || "").trim() : "";
+  const isFinalSegment =
+    workoutIsFinite() && nextPos(run.blockIndex, run.iter, run.segIndex) === null;
+
+  const lead = [];
+  if (enteringBlock && named) lead.push(named);
+  else if (enteringBlock && onLastBlock() && run.blocks.length > 1) lead.push("Bloc final");
+  if (isFinalSegment) lead.push("Dernier segment");
+
+  if (!lead.length) {
+    speak(phrase);
+    return;
+  }
+
+  // Say the lead, then wait a beat once it finishes before the segment name.
+  speak(lead.join(". "), true, () => {
+    _announceTimer = setTimeout(() => {
+      _announceTimer = null;
+      if (run.active && !run.paused) speak(phrase);
+    }, ANNOUNCE_GAP_MS);
+  });
 }
 
 // Play a single soft tone with a smooth attack/decay envelope (no clicks).
@@ -1048,18 +1441,24 @@ function chimeFinish() {
 const SCHED_INTERVAL_MS = 25;   // how often the lookahead scheduler runs
 const SCHED_AHEAD = 0.18;       // schedule notes this far ahead (s)
 
-function clampSongBpm(b) {
-  const n = Math.round(Number(b) || 120);
-  return Math.min(180, Math.max(80, n));
-}
-function songTempo(song) {
-  const v = state.settings.songBpm && state.settings.songBpm[song.id];
-  return clampSongBpm(v != null ? v : song.defBpm);
-}
-// Which song should play right now, taken from the active segment's category.
-function activeSongId() {
+// The category whose song/tempo should sound right now: the running segment's
+// category, or (when idle, e.g. a Settings preview) the first category.
+function activeCategory() {
   const seg = currentSegment();
-  const cat = seg ? getCategory(seg.categoryId) : null;
+  if (seg) return getCategory(seg.categoryId);
+  return state.categories[0] || null;
+}
+// The tempo (BPM) for a category — governs its song AND its metronome.
+function categoryTempo(cat) {
+  if (!cat) return 160;
+  return clampTempo(cat.tempo != null ? cat.tempo : defaultTempoForSong(cat.song));
+}
+function activeTempo() {
+  return categoryTempo(activeCategory());
+}
+// Which song should play right now, taken from the active category.
+function activeSongId() {
+  const cat = activeCategory();
   const id = cat && cat.song ? cat.song : SONG_IDS[0];
   if (id === "none") return "none";
   return getSong(id) ? id : SONG_IDS[0];
@@ -1072,17 +1471,13 @@ const scape = {
   timer: null,
   step: 0,             // 16th-note counter (music)
   songId: null,        // id of the song currently playing (from the active segment)
+  tempo: 160,          // current BPM (from the active category) — drives both voices
   nextNoteTime: 0,     // next music 16th to schedule (audioCtx time)
   beat: 0,             // cadence beat counter
   nextClickTime: 0,    // next metronome click (audioCtx time)
   noiseBuf: null,      // cached white-noise buffer for the shaker
   previewTimer: null,
 };
-
-function clampBpm(b) {
-  const n = Math.round(Number(b) || 140);
-  return Math.min(180, Math.max(100, n));
-}
 
 function scapeMaster() {
   if (!audioCtx) return null;
@@ -1201,13 +1596,13 @@ function musicScheduler() {
   const song = getSong(scape.songId);
   // "Aucune" (or unknown) → no music for this segment; advance the clock silently.
   if (!song) {
-    const sx = 60 / 120 / 4;
+    const sx = 60 / (scape.tempo || 160) / 4;
     while (scape.nextNoteTime < audioCtx.currentTime + SCHED_AHEAD) {
       scape.nextNoteTime += sx; scape.step++;
     }
     return;
   }
-  const sixteenth = 60 / songTempo(song) / 4;
+  const sixteenth = 60 / scape.tempo / 4;
   while (scape.nextNoteTime < audioCtx.currentTime + SCHED_AHEAD) {
     const t = scape.nextNoteTime;
     const bar = Math.floor(scape.step / 16) % song.prog.length;
@@ -1232,7 +1627,7 @@ function musicScheduler() {
 }
 
 function cadenceScheduler() {
-  const period = 60 / clampBpm(state.settings.cadenceBpm);
+  const period = 60 / (scape.tempo || 160);
   while (scape.nextClickTime < audioCtx.currentTime + SCHED_AHEAD) {
     playClick(scape.nextClickTime, scape.beat % 4 === 0);
     scape.nextClickTime += period;
@@ -1248,8 +1643,8 @@ function scapeTick() {
 
 // ---- Lifecycle ----
 
-// opts (optional): { mode, songId } to force a specific mode/song — used by
-// previews. Without opts it follows the saved settings + active segment.
+// opts (optional): { mode, songId, tempo } to force a specific mode/song/tempo
+// — used by previews. Without opts it follows the saved mode + active category.
 function startSoundscape(opts) {
   if (!audioCtx) return;
   const mode = (opts && opts.mode) || state.settings.soundscape;
@@ -1263,6 +1658,7 @@ function startSoundscape(opts) {
   scape.step = 0;
   scape.beat = 0;
   scape.songId = (opts && opts.songId) || activeSongId();
+  scape.tempo = (opts && opts.tempo != null) ? clampTempo(opts.tempo) : activeTempo();
   const t0 = now + 0.1;
   scape.nextNoteTime = t0;
   scape.nextClickTime = t0;
@@ -1297,63 +1693,21 @@ function previewSoundscape() {
   scape.previewTimer = setTimeout(stopSoundscape, 7000);
 }
 
-// Audition a specific song for a couple of bars — used when picking a song for
+// Audition a category's song + tempo for a couple of bars — used when editing
 // a category. Skipped during a run (the live switch handles that instead).
-function previewSong(id) {
-  if (run.active || !id || id === "none") return;
+// Picks a sensible mode so there's always audible feedback: the saved ambiance
+// if set, otherwise music (or the metronome when the category has no song).
+function previewCategory(cat) {
+  if (run.active || !cat) return;
+  const hasSong = cat.song && cat.song !== "none" && getSong(cat.song);
+  let mode = state.settings.soundscape;
+  if (mode === "none") mode = hasSong ? "music" : "cadence";
+  if ((mode === "music" || mode === "both") && !hasSong) mode = "cadence";
   unlockAudio();
   stopSoundscape();
-  startSoundscape({ mode: "music", songId: id });
+  startSoundscape({ mode, songId: cat.song, tempo: cat.tempo });
   if (!scape.running) return;
   scape.previewTimer = setTimeout(stopSoundscape, 3500);
-}
-
-// Show the per-song tempo list for music modes, and the cadence slider for
-// metronome modes.
-function syncSoundscapeFields() {
-  const mode = els.selectSoundscape.value;
-  els.songBpmField.hidden = !(mode === "music" || mode === "both");
-  els.cadenceField.hidden = !(mode === "cadence" || mode === "both");
-}
-
-// Render one tempo slider per song in the Settings sheet.
-function renderSongBpms() {
-  const box = els.songBpmList;
-  box.innerHTML = "";
-  SONGS.forEach((song) => {
-    const row = document.createElement("div");
-    row.className = "song-bpm-row";
-
-    const head = document.createElement("div");
-    head.className = "song-bpm-head";
-    const name = document.createElement("span");
-    name.textContent = song.name;
-    const val = document.createElement("span");
-    val.className = "song-bpm-val";
-    const bpm = songTempo(song);
-    val.textContent = bpm + " BPM";
-    head.appendChild(name);
-    head.appendChild(val);
-
-    const range = document.createElement("input");
-    range.type = "range";
-    range.className = "range";
-    range.min = "80"; range.max = "180"; range.step = "1";
-    range.value = String(bpm);
-    range.setAttribute("aria-label", "Tempo " + song.name);
-    range.addEventListener("input", () => {
-      const v = clampSongBpm(range.value);
-      state.settings.songBpm[song.id] = v;
-      val.textContent = v + " BPM";
-      saveState();
-      // If this song is playing right now, the scheduler picks up the new
-      // tempo automatically on its next note.
-    });
-
-    row.appendChild(head);
-    row.appendChild(range);
-    box.appendChild(row);
-  });
 }
 
 function vibrate(pattern) {
@@ -1417,7 +1771,7 @@ function updateMediaSessionMetadata() {
     navigator.mediaSession.metadata = new MediaMetadata({
       title: cat ? cat.label : APP_NAME,
       artist: APP_NAME,
-      album: `Segment ${run.index + 1} / ${run.segments.length}`,
+      album: runProgressText(),
     });
     navigator.mediaSession.playbackState = run.paused ? "paused" : "playing";
   } catch (e) { /* ignore */ }
@@ -1460,22 +1814,88 @@ document.addEventListener("visibilitychange", () => {
 const run = {
   active: false,
   paused: false,
-  segments: [],        // snapshot of the sequence at start (deep-copied)
-  index: 0,            // current segment index
+  blocks: [],          // snapshot of the non-empty blocks at start (deep-copied)
+  blockIndex: 0,       // current block
+  iter: 1,             // current iteration within the block (1-based)
+  segIndex: 0,         // current segment within the block
   segmentEndAt: 0,     // Date.now() ms when the current segment ends
   remainingWhenPaused: 0, // ms remaining, captured on pause
-  loop: false,
   rafId: null,
   lastBeepSecond: null, // guards 3-2-1 beeps from firing twice
   lastPulseSecond: null, // guards the ring/time "tick" bloom from firing twice
 };
 
 function currentSegment() {
-  return run.segments[run.index] || null;
+  const block = run.blocks[run.blockIndex];
+  return block ? block.segments[run.segIndex] || null : null;
+}
+
+// ---- Cursor maths over blocks × iterations × segments ----
+// A position is { bi, it, si }. These walk forward/back across the whole
+// workout, looping a block for its repeat count before moving to the next.
+
+function nextPos(bi, it, si) {
+  const block = run.blocks[bi];
+  if (!block) return null;
+  // More segments left in this iteration?
+  if (si + 1 < block.segments.length) return { bi, it, si: si + 1 };
+  // Another iteration of this block? (Infinity for the ∞ sentinel.)
+  if (it + 1 <= blockRepeatVal(block)) return { bi, it: it + 1, si: 0 };
+  // Otherwise advance to the next block.
+  if (bi + 1 < run.blocks.length) return { bi: bi + 1, it: 1, si: 0 };
+  return null;
+}
+
+function prevPos(bi, it, si) {
+  if (si > 0) return { bi, it, si: si - 1 };
+  if (it > 1) return { bi, it: it - 1, si: run.blocks[bi].segments.length - 1 };
+  if (bi > 0) {
+    const prev = run.blocks[bi - 1];
+    // Land on the last iteration of the previous block (1 if it loops forever).
+    const lastIt = prev.repeat === 0 ? 1 : prev.repeat;
+    return { bi: bi - 1, it: lastIt, si: prev.segments.length - 1 };
+  }
+  return null;
+}
+
+// Is the current block the last one (so it's the "final block")?
+function onLastBlock() {
+  return run.blockIndex === run.blocks.length - 1;
+}
+
+// Whole workout has a finite number of segments (no ∞ block anywhere)?
+function workoutIsFinite() {
+  return run.blocks.every((b) => b.repeat !== 0);
+}
+
+// Text for the top progress pill: blocks/iterations when there's structure,
+// else the plain "n / N" segment counter for a simple single-block workout.
+function runProgressText() {
+  const block = run.blocks[run.blockIndex];
+  if (!block) return "";
+  const B = run.blocks.length;
+  const r = blockRepeatVal(block);
+  // Prefer a custom name; otherwise "Bloc i/B" when there's more than one block.
+  const named = (block.name || "").trim();
+  const label = named || (B > 1 ? `Bloc ${run.blockIndex + 1}/${B}` : "");
+  const parts = [];
+  if (label) parts.push(label);
+  if (r > 1) parts.push(r === Infinity ? `tour ${run.iter}` : `tour ${run.iter}/${r}`);
+  if (parts.length) return parts.join(" · ");
+  return `${run.segIndex + 1} / ${block.segments.length}`;
 }
 
 function startRun() {
-  if (state.sequence.length === 0) return;
+  // Snapshot the workout, dropping empty blocks. Bail if there's nothing to do.
+  const blocks = state.blocks
+    .map((b) => ({
+      id: b.id,
+      name: b.name || "",
+      repeat: b.repeat,
+      segments: b.segments.map((s) => ({ ...s })),
+    }))
+    .filter((b) => b.segments.length);
+  if (!blocks.length) return;
 
   // Unlock audio within this user gesture (critical for iOS).
   unlockAudio();
@@ -1485,21 +1905,24 @@ function startRun() {
 
   run.active = true;
   run.paused = false;
-  run.loop = state.settings.loop;
-  run.segments = state.sequence.map((s) => ({ ...s }));
-  run.index = 0;
+  run.blocks = blocks;
+  run.blockIndex = 0;
+  run.iter = 1;
+  run.segIndex = 0;
 
-  startSoundscape(); // now that run.segments is set, picks the right starting song
+  startSoundscape(); // now that run.blocks is set, picks the right starting song
 
   showScreen("run");
-  beginSegment(0, /*announce*/ true);
+  beginSegment({ bi: 0, it: 1, si: 0 }, /*announce*/ true);
   maybeWarnNoSpeech(); // hint once if this browser's TTS is wedged
   loop();
 }
 
-// Set up segment at `index`. Computes the absolute end timestamp.
-function beginSegment(index, announce) {
-  run.index = index;
+// Set up the segment at `pos` ({ bi, it, si }). Computes the absolute end time.
+function beginSegment(pos, announce) {
+  run.blockIndex = pos.bi;
+  run.iter = pos.it;
+  run.segIndex = pos.si;
   const seg = currentSegment();
   if (!seg) return;
 
@@ -1510,7 +1933,7 @@ function beginSegment(index, announce) {
   // Visuals
   const cat = getCategory(seg.categoryId);
   els.runCategory.textContent = cat ? cat.label : "segment";
-  els.runProgress.textContent = `${index + 1} / ${run.segments.length}`;
+  els.runProgress.textContent = runProgressText();
 
   // Next-segment hint
   const next = nextSegmentLabel();
@@ -1518,11 +1941,15 @@ function beginSegment(index, announce) {
 
   updateMediaSessionMetadata();
 
-  // Switch the music to this segment's song, restarting at bar 1 for a clean
-  // "new section" feel.
-  if (scape.running && (scape.mode === "music" || scape.mode === "both")) {
-    scape.songId = activeSongId();
-    scape.step = 0;
+  // Retune the soundscape to this segment's category: its song (music modes)
+  // and its tempo (both music and metronome), restarting music at bar 1 for a
+  // clean "new section" feel.
+  if (scape.running) {
+    scape.tempo = activeTempo();
+    if (scape.mode === "music" || scape.mode === "both") {
+      scape.songId = activeSongId();
+      scape.step = 0;
+    }
   }
 
   // Cues
@@ -1537,12 +1964,9 @@ function beginSegment(index, announce) {
 }
 
 function nextSegmentLabel() {
-  let ni = run.index + 1;
-  if (ni >= run.segments.length) {
-    if (run.loop) ni = 0;
-    else return null;
-  }
-  const seg = run.segments[ni];
+  const np = nextPos(run.blockIndex, run.iter, run.segIndex);
+  if (!np) return null;
+  const seg = run.blocks[np.bi].segments[np.si];
   const cat = seg ? getCategory(seg.categoryId) : null;
   return cat ? cat.label : null;
 }
@@ -1598,14 +2022,9 @@ function paint() {
 }
 
 function advanceSegment() {
-  const last = run.segments.length - 1;
-  if (run.index < last) {
-    beginSegment(run.index + 1, true);
-  } else if (run.loop) {
-    beginSegment(0, true);
-  } else {
-    finishRun();
-  }
+  const np = nextPos(run.blockIndex, run.iter, run.segIndex);
+  if (np) beginSegment(np, true);
+  else finishRun();
 }
 
 // Re-trigger the one-shot "tick" bloom on the ring + countdown number.
@@ -1671,6 +2090,7 @@ function finishRun() {
 function stopRunInternals() {
   run.active = false;
   run.paused = false;
+  clearPendingAnnounce();
   if (run.rafId) cancelAnimationFrame(run.rafId);
   run.rafId = null;
   stopSilentAudio();
@@ -1723,13 +2143,10 @@ function setPlayPauseUI(isPaused) {
 
 function skipNext() {
   if (!run.active) return;
-  const last = run.segments.length - 1;
-  if (run.index < last) {
+  const np = nextPos(run.blockIndex, run.iter, run.segIndex);
+  if (np) {
     if (run.paused) resumeRun();
-    beginSegment(run.index + 1, true);
-  } else if (run.loop) {
-    if (run.paused) resumeRun();
-    beginSegment(0, true);
+    beginSegment(np, true);
   } else {
     finishRun();
   }
@@ -1741,10 +2158,11 @@ function skipPrev() {
   const seg = currentSegment();
   const elapsedMs = seg ? seg.durationSeconds * 1000 - (run.segmentEndAt - Date.now()) : 0;
   if (run.paused) resumeRun();
-  if (elapsedMs > 2000 || run.index === 0) {
-    beginSegment(run.index, true);
+  const here = { bi: run.blockIndex, it: run.iter, si: run.segIndex };
+  if (elapsedMs > 2000) {
+    beginSegment(here, true);
   } else {
-    beginSegment(run.index - 1, true);
+    beginSegment(prevPos(run.blockIndex, run.iter, run.segIndex) || here, true);
   }
 }
 
@@ -1817,19 +2235,15 @@ function normalizeHex(hex) {
 
 function renderAll() {
   renderChips();
-  renderSequence();
+  renderBlocks();
   renderPresets();
 }
 
 /* ---- Wire up events ---- */
 
 function bindEvents() {
-  // Loop toggle
-  els.toggleLoop.checked = state.settings.loop;
-  els.toggleLoop.addEventListener("change", () => {
-    state.settings.loop = els.toggleLoop.checked;
-    saveState();
-  });
+  // Add a new block
+  els.btnAddBlock.addEventListener("click", addBlock);
 
   // Start
   els.btnStart.addEventListener("click", startRun);
@@ -1847,10 +2261,6 @@ function bindEvents() {
     els.toggleWakelock.checked = state.settings.keepScreenAwake;
     els.toggleBeeps.checked = state.settings.beeps;
     els.selectSoundscape.value = state.settings.soundscape;
-    els.rangeCadence.value = String(state.settings.cadenceBpm);
-    els.cadenceBpmLabel.textContent = String(state.settings.cadenceBpm);
-    renderSongBpms();
-    syncSoundscapeFields();
     openModal(els.modalSettings);
   });
   els.selectVoice.addEventListener("change", () => {
@@ -1880,18 +2290,11 @@ function bindEvents() {
   els.selectSoundscape.addEventListener("change", () => {
     state.settings.soundscape = els.selectSoundscape.value;
     saveState();
-    syncSoundscapeFields();
     // Apply live if a run is in progress.
     if (run.active && !run.paused) {
       stopSoundscape();
       startSoundscape();
     }
-  });
-  els.rangeCadence.addEventListener("input", () => {
-    state.settings.cadenceBpm = clampBpm(els.rangeCadence.value);
-    els.cadenceBpmLabel.textContent = String(state.settings.cadenceBpm);
-    saveState();
-    // Tempo change is picked up by the running scheduler automatically.
   });
   els.btnPreviewSoundscape.addEventListener("click", previewSoundscape);
 

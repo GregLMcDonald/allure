@@ -7,7 +7,7 @@
    All paths are RELATIVE so the worker works under a GitHub Pages subpath.
    ========================================================================= */
 
-const CACHE_VERSION = "allure-v12";
+const CACHE_VERSION = "allure-v17";
 
 // The app shell. Google Fonts are cached opportunistically at runtime (below)
 // so the app still installs even if the network is unavailable for fonts.
