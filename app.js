@@ -26,6 +26,11 @@
 const APP_NAME = "Allure";
 
 const STORAGE_KEY = "allure.state.v1";
+
+// Material Symbols "timer" (stopwatch) glyph — used to label presentational
+// durations (viewBox 0 -960 960 960, fill via currentColor).
+const STOPWATCH_PATH =
+  '<path fill="currentColor" d="M360-840v-80h240v80H360Zm80 440h80v-240h-80v240Zm40 320q-75 0-140.5-28.5t-114-77q-48.5-48.5-77-114T120-440q0-75 28.5-140.5t77-114q48.5-48.5 114-77T480-800q63 0 121 20t107 58l56-56 56 56-56 56q38 49 58 107t20 121q0 75-28.5 140.5t-77 114q-48.5 48.5-114 77T480-80Zm0-80q116 0 198-82t82-198q0-116-82-198t-198-82q-116 0-198 82t-82 198q0 116 82 198t198 82Zm0-280Z"/>';
 const RING_RADIUS = 108;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS; // ≈ 678.58
 
@@ -617,11 +622,13 @@ function renderBlockCard(block, bi, highlight) {
     setActiveBlock(block.id);
   });
 
-  // ---- Header: name · repeat control · subtotal · move/delete ----
+  // ---- Header: name on its own line, then the controls row beneath it ----
   const head = document.createElement("div");
   head.className = "blk-head";
 
-  // Editable block name (placeholder shows the default "Bloc N").
+  // Name line: editable field + a pencil hint so it's obviously tappable.
+  const nameRow = document.createElement("div");
+  nameRow.className = "blk-name-row";
   const title = document.createElement("input");
   title.type = "text";
   title.className = "blk-name";
@@ -634,11 +641,26 @@ function renderBlockCard(block, bi, highlight) {
     block.name = title.value;
     saveState(); // no re-render: keep the field focused while typing
   });
+  const editHint = document.createElement("span");
+  editHint.className = "blk-edit-hint";
+  editHint.textContent = "✎";
+  editHint.setAttribute("aria-hidden", "true");
+  nameRow.appendChild(title);
+  nameRow.appendChild(editHint);
 
+  // Controls line: repeat stepper · subtotal · move/delete.
+  const controls = document.createElement("div");
+  controls.className = "blk-controls";
+
+  // Block subtotal — presentational only, so it's a stopwatch icon + plain
+  // text on the card background (no button chrome, unlike the segment durations).
   const total = document.createElement("span");
   total.className = "blk-total";
-  total.textContent = formatTotal(blockTotalSeconds(block));
   total.setAttribute("aria-label", `Durée du bloc : ${formatTotal(blockTotalSeconds(block))}`);
+  total.innerHTML =
+    `<svg class="ico" viewBox="0 -960 960 960" width="16" height="16" aria-hidden="true">${STOPWATCH_PATH}</svg>` +
+    `<span class="blk-total-text"></span>`;
+  total.querySelector(".blk-total-text").textContent = formatTotal(blockTotalSeconds(block));
 
   const ctrls = document.createElement("div");
   ctrls.className = "blk-ctrls";
@@ -648,10 +670,12 @@ function renderBlockCard(block, bi, highlight) {
   );
   ctrls.appendChild(miniBtn("✕", "Supprimer le bloc", false, () => deleteBlock(bi), true));
 
-  head.appendChild(title);
-  head.appendChild(buildRepeatControl(block));
-  head.appendChild(total);
-  head.appendChild(ctrls);
+  controls.appendChild(buildRepeatControl(block));
+  controls.appendChild(total);
+  controls.appendChild(ctrls);
+
+  head.appendChild(nameRow);
+  head.appendChild(controls);
   card.appendChild(head);
 
   // ---- Segment list ----
@@ -757,10 +781,19 @@ function renderSegItem(block, bi, seg, si, highlight) {
   );
   btns.appendChild(miniBtn("✕", "Supprimer", false, () => deleteSegment(bi, si), true));
 
-  li.appendChild(color);
-  li.appendChild(main);
-  li.appendChild(dur);
-  li.appendChild(btns);
+  // Top line: colour marker + label. Bottom line: duration + move/delete.
+  const top = document.createElement("div");
+  top.className = "seq-top";
+  top.appendChild(color);
+  top.appendChild(main);
+
+  const bottom = document.createElement("div");
+  bottom.className = "seq-bottom";
+  bottom.appendChild(dur);
+  bottom.appendChild(btns);
+
+  li.appendChild(top);
+  li.appendChild(bottom);
   return li;
 }
 

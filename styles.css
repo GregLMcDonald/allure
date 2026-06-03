@@ -234,17 +234,21 @@ body {
 
 /* Sequence list ----------------------------------------------------------- */
 .seq-list { list-style: none; margin: 0; padding: 0; }
+/* Two stacked lines: label line (colour + name) then a controls line, so long
+   category names never crowd the duration/move/delete controls. */
 .seq-item {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px 8px;
   border-radius: var(--radius-sm);
   background: var(--bg);
   margin-bottom: 8px;
 }
+.seq-top { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.seq-bottom { display: flex; align-items: center; gap: 8px; }
 .seq-color {
-  width: 12px; height: 36px; border-radius: 6px; flex-shrink: 0;
+  width: 12px; height: 28px; border-radius: 6px; flex-shrink: 0;
   /* Glossy vertical sheen over the category color. */
   background-image: linear-gradient(120deg, rgba(255,255,255,0.55), rgba(255,255,255,0) 60%);
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.25);
@@ -252,12 +256,15 @@ body {
 /* Newly added segment pops in (class added by JS, then removed). */
 .seq-item.just-added { animation: pop-in var(--spring) both; }
 .seq-main { flex: 1; min-width: 0; }
-.seq-label { font-weight: 800; }
+.seq-label { font-weight: 800; overflow-wrap: anywhere; }
+.seq-btns { margin-left: auto; }
 .seq-dur {
   font-variant-numeric: tabular-nums;
   color: var(--primary-deep);
   font-weight: 800;
-  background: var(--blush);
+  /* Same chrome as the ▲▼✕ mini-buttons: white, borderless, raised by a shadow
+     — so it clearly reads as a tappable button (vs. the flat block total). */
+  background: var(--surface);
   border: none;
   border-radius: 10px;
   padding: 8px 10px;
@@ -266,9 +273,11 @@ body {
   font-family: var(--font-body);
   font-size: 0.95rem;
   cursor: pointer;
-  transition: transform var(--spring), filter var(--transition);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--spring), box-shadow var(--transition);
 }
-.seq-dur:hover { filter: brightness(0.97); }
+.seq-dur:hover { box-shadow: var(--shadow-md); }
+.seq-dur:disabled { opacity: 0.35; box-shadow: none; cursor: default; }
 .seq-dur:active { transform: scale(0.92); transition: transform 90ms ease; }
 .seq-btns { display: flex; gap: 4px; flex-shrink: 0; }
 .mini-btn {
@@ -299,42 +308,59 @@ body {
   border-color: var(--primary);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 16%, transparent);
 }
+/* Name on its own line, controls stacked beneath — keeps long names from
+   crowding the repeat/move/delete controls on narrow screens. */
 .blk-head {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
   margin-bottom: 8px;
-  flex-wrap: wrap;
+}
+.blk-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .blk-name {
   flex: 1;
-  min-width: 80px;
+  min-width: 0;
   font-family: var(--font-display);
   font-weight: 700;
   font-size: 1rem;
   color: var(--ink);
   background: transparent;
   border: none;
-  border-bottom: 1.5px dashed transparent;
+  /* Persistent dashed underline so it reads as an editable field at rest. */
+  border-bottom: 1.5px dashed color-mix(in srgb, var(--primary) 28%, transparent);
   padding: 2px 2px 3px;
   border-radius: 4px;
 }
 .blk-name::placeholder { color: var(--muted); opacity: 0.8; }
-.blk-name:hover { border-bottom-color: color-mix(in srgb, var(--primary) 30%, transparent); }
+.blk-name:hover { border-bottom-color: color-mix(in srgb, var(--primary) 45%, transparent); }
 .blk-name:focus {
   outline: none;
   border-bottom-color: var(--primary);
   background: color-mix(in srgb, var(--primary) 6%, transparent);
 }
+.blk-edit-hint { color: var(--muted); font-size: 0.85rem; flex-shrink: 0; }
+.blk-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.blk-controls .blk-ctrls { margin-left: auto; }
+/* Presentational subtotal: stopwatch icon + plain text, on the card bg. */
 .blk-total {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-variant-numeric: tabular-nums;
   font-weight: 800;
   font-size: 0.82rem;
-  color: var(--primary-deep);
-  background: var(--blush);
-  padding: 3px 9px;
-  border-radius: 999px;
+  color: var(--muted);
 }
+.blk-total .ico { flex-shrink: 0; opacity: 0.9; }
 .blk-ctrls { display: flex; gap: 4px; flex-shrink: 0; }
 .blk-empty { margin: 2px 2px 10px; }
 /* Segment rows sit on the card's bg, so lift them to the surface tone. */
